@@ -93,6 +93,11 @@ const sidebarItem: menu[] = [
     to: '/persona'
   },
   {
+    title: 'core.navigation.characterRoleplay',
+    icon: 'mdi-drama-masks',
+    to: '/character-roleplay'
+  },
+  {
     title: 'core.navigation.groups.more',
     icon: 'mdi-dots-horizontal',
     children: [

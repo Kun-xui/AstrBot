@@ -1,0 +1,1 @@
+"""Character roleplay package management."""

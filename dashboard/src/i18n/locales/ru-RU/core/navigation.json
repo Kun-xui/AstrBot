@@ -5,6 +5,7 @@
     "providers": "Провайдеры моделей",
     "commands": "Команды",
     "persona": "Персонажи",
+    "characterRoleplay": "Ролевая игра",
     "subagent": "Субагенты",
     "toolUse": "Инструменты MCP",
     "extension": "Плагины",

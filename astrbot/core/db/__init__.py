@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from astrbot.core.db.po import (
     ApiKey,
     Attachment,
+    CharacterPackage,
     ChatUIProject,
     CommandConfig,
     CommandConflict,
@@ -876,4 +877,53 @@ class BaseDatabase(abc.ABC):
         self, session_id: str, creator: str
     ) -> ChatUIProject | None:
         """Get the project that a session belongs to."""
+        ...
+
+    # ====
+    # Character Package Management
+    # ====
+
+    @abc.abstractmethod
+    async def insert_character_package(
+        self,
+        name: str,
+        system_prompt: str,
+        folder_path: str,
+        source_anime: str | None = None,
+        memory: str = "",
+        tts_provider_id: str | None = None,
+        tts_voice: str | None = None,
+        tts_enabled: bool = False,
+        image_mode: str = "combined",
+        avatar: str | None = None,
+    ) -> CharacterPackage:
+        ...
+
+    @abc.abstractmethod
+    async def get_character_package(self, character_id: str) -> CharacterPackage | None:
+        ...
+
+    @abc.abstractmethod
+    async def get_all_character_packages(self) -> list[CharacterPackage]:
+        ...
+
+    @abc.abstractmethod
+    async def update_character_package(
+        self,
+        character_id: str,
+        *,
+        name: str | None = None,
+        system_prompt: str | None = None,
+        memory: str | None = None,
+        tts_provider_id: str | None = None,
+        tts_voice: str | None = None,
+        tts_enabled: bool | None = None,
+        image_mode: str | None = None,
+        enabled: bool | None = None,
+        avatar: str | None = None,
+    ) -> CharacterPackage | None:
+        ...
+
+    @abc.abstractmethod
+    async def delete_character_package(self, character_id: str) -> None:
         ...

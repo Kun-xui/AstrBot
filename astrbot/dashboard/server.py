@@ -34,6 +34,7 @@ from .routes import *
 from .routes.api_key import ALL_OPEN_API_SCOPES
 from .routes.auth import DASHBOARD_JWT_COOKIE_NAME
 from .routes.backup import BackupRoute
+from .routes.character import CharacterRoute
 from .routes.live_chat import LiveChatRoute
 from .routes.platform import PlatformRoute
 from .routes.route import Response, RouteContext
@@ -184,6 +185,7 @@ class AstrBotDashboard:
         self.kb_route = KnowledgeBaseRoute(self.context, core_lifecycle)
         self.platform_route = PlatformRoute(self.context, core_lifecycle)
         self.backup_route = BackupRoute(self.context, db, core_lifecycle)
+        self.character_route = CharacterRoute(self.context, db, core_lifecycle)
         self.live_chat_route = LiveChatRoute(self.context, db, core_lifecycle)
 
         self.app.add_url_rule(

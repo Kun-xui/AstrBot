@@ -5,6 +5,7 @@
   "providers": "Providers",
   "commands": "Commands",
   "persona": "Persona",
+  "characterRoleplay": "Character Roleplay",
   "subagent": "SubAgents",
   "toolUse": "MCP Tools",
   "config": "Config",

@@ -12,6 +12,7 @@ from astrbot.core.db import BaseDatabase
 from astrbot.core.db.po import (
     ApiKey,
     Attachment,
+    CharacterPackage,
     ChatUIProject,
     CommandConfig,
     CommandConflict,
@@ -1511,6 +1512,116 @@ class SQLiteDatabase(BaseDatabase):
             )
 
         await self._run_in_tx(_op)
+
+    # ====
+    # Character Package Management
+    # ====
+
+    async def insert_character_package(
+        self,
+        name: str,
+        system_prompt: str,
+        folder_path: str,
+        source_anime: str | None = None,
+        memory: str = "",
+        tts_provider_id: str | None = None,
+        tts_voice: str | None = None,
+        tts_enabled: bool = False,
+        image_mode: str = "combined",
+        avatar: str | None = None,
+    ) -> CharacterPackage:
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                pkg = CharacterPackage(
+                    name=name,
+                    system_prompt=system_prompt,
+                    folder_path=folder_path,
+                    source_anime=source_anime,
+                    memory=memory,
+                    tts_provider_id=tts_provider_id,
+                    tts_voice=tts_voice,
+                    tts_enabled=tts_enabled,
+                    image_mode=image_mode,
+                    avatar=avatar,
+                )
+                session.add(pkg)
+                await session.flush()
+                await session.refresh(pkg)
+                return pkg
+
+    async def get_character_package(self, character_id: str) -> CharacterPackage | None:
+        async with self.get_db() as session:
+            session: AsyncSession
+            result = await session.execute(
+                select(CharacterPackage).where(
+                    CharacterPackage.character_id == character_id
+                )
+            )
+            return result.scalar_one_or_none()
+
+    async def get_all_character_packages(self) -> list[CharacterPackage]:
+        async with self.get_db() as session:
+            session: AsyncSession
+            result = await session.execute(
+                select(CharacterPackage).order_by(desc(CharacterPackage.created_at))
+            )
+            return list(result.scalars().all())
+
+    async def update_character_package(
+        self,
+        character_id: str,
+        *,
+        name: str | None = None,
+        system_prompt: str | None = None,
+        memory: str | None = None,
+        tts_provider_id: str | None = None,
+        tts_voice: str | None = None,
+        tts_enabled: bool | None = None,
+        image_mode: str | None = None,
+        enabled: bool | None = None,
+        avatar: str | None = None,
+    ) -> CharacterPackage | None:
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                query = update(CharacterPackage).where(
+                    col(CharacterPackage.character_id) == character_id
+                )
+                values: dict[str, T.Any] = {}
+                if name is not None:
+                    values["name"] = name
+                if system_prompt is not None:
+                    values["system_prompt"] = system_prompt
+                if memory is not None:
+                    values["memory"] = memory
+                if tts_provider_id is not None:
+                    values["tts_provider_id"] = tts_provider_id
+                if tts_voice is not None:
+                    values["tts_voice"] = tts_voice
+                if tts_enabled is not None:
+                    values["tts_enabled"] = tts_enabled
+                if image_mode is not None:
+                    values["image_mode"] = image_mode
+                if enabled is not None:
+                    values["enabled"] = enabled
+                if avatar is not None:
+                    values["avatar"] = avatar
+                if not values:
+                    return await self.get_character_package(character_id)
+                query = query.values(**values)
+                await session.execute(query)
+        return await self.get_character_package(character_id)
+
+    async def delete_character_package(self, character_id: str) -> None:
+        async with self.get_db() as session:
+            session: AsyncSession
+            async with session.begin():
+                await session.execute(
+                    delete(CharacterPackage).where(
+                        col(CharacterPackage.character_id) == character_id
+                    )
+                )
 
     # ====
     # Deprecated Methods

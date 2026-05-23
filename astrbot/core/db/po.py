@@ -165,6 +165,42 @@ class Persona(TimestampMixin, SQLModel, table=True):
     )
 
 
+class CharacterPackage(TimestampMixin, SQLModel, table=True):
+    """Character roleplay package for anime character simulation."""
+
+    __tablename__ = "character_packages"
+
+    id: int | None = Field(
+        primary_key=True,
+        sa_column_kwargs={"autoincrement": True},
+        default=None,
+    )
+    character_id: str = Field(
+        max_length=36,
+        nullable=False,
+        unique=True,
+        default_factory=lambda: str(uuid.uuid4()),
+    )
+    name: str = Field(max_length=255, nullable=False)
+    source_anime: str | None = Field(default=None, max_length=255)
+    system_prompt: str = Field(sa_type=Text, nullable=False)
+    memory: str = Field(default="", sa_type=Text)
+    tts_provider_id: str | None = Field(default=None, max_length=255)
+    tts_voice: str | None = Field(default=None, max_length=255)
+    tts_enabled: bool = Field(default=False)
+    image_mode: str = Field(default="combined", max_length=32)
+    folder_path: str = Field(nullable=False)
+    enabled: bool = Field(default=True)
+    avatar: str | None = Field(default=None, max_length=512)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "character_id",
+            name="uix_character_id",
+        ),
+    )
+
+
 class CronJob(TimestampMixin, SQLModel, table=True):
     """Cron job definition for scheduler and WebUI management."""
 

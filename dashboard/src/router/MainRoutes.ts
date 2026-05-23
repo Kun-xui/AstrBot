@@ -85,6 +85,11 @@ const MainRoutes = {
       component: () => import('@/views/PersonaPage.vue')
     },
     {
+      name: 'CharacterRoleplay',
+      path: '/character-roleplay',
+      component: () => import('@/views/CharacterRoleplayPage.vue')
+    },
+    {
       name: 'SubAgent',
       path: '/subagent',
       component: () => import('@/views/SubAgentPage.vue')
