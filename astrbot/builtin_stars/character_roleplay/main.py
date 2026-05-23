@@ -2,11 +2,12 @@ import os
 
 from astrbot.api import star
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.message_components import Image, Plain
 from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.core import logger
+from astrbot.core.agent.message import TextPart
 from astrbot.core.character.package_manager import CharacterPackageManager
 from astrbot.core.db import BaseDatabase
+from astrbot.core.message.components import Image, Plain, Record
 
 
 class Main(star.Star):
@@ -27,13 +28,13 @@ class Main(star.Star):
     async def list_characters(self, event: AstrMessageEvent):
         packages = await self.pkg_mgr.list_packages()
         if not packages:
-            yield event.plain_result("No character packages installed.")
+            yield event.plain_result("当前没有安装任何角色包。")
             return
-        lines = ["Available characters:"]
+        lines = ["可用角色列表:"]
         for pkg in packages:
-            status = "Enabled" if pkg.enabled else "Disabled"
-            active = " [Active]" if self._get_active_character(event.unified_msg_origin) == pkg.character_id else ""
-            lines.append(f"  - {pkg.name} ({pkg.source_anime or 'Unknown'}) [{status}]{active}")
+            status = "已启用" if pkg.enabled else "已禁用"
+            active = " [当前使用]" if self._get_active_character(event.unified_msg_origin) == pkg.character_id else ""
+            lines.append(f"  - {pkg.name} ({pkg.source_anime or '未知来源'}) [{status}]{active}")
         yield event.plain_result("\n".join(lines))
 
     @character_cmd.group_command("use", alias={"使用"})
@@ -45,19 +46,19 @@ class Main(star.Star):
                 target = pkg
                 break
         if not target:
-            yield event.plain_result(f"Character '{name}' not found or not enabled.")
+            yield event.plain_result(f"角色 '{name}' 未找到或未启用。")
             return
         self._active_characters[event.unified_msg_origin] = target.character_id
-        yield event.plain_result(f"Switched to character: {target.name}")
+        yield event.plain_result(f"已切换到角色: {target.name}")
 
     @character_cmd.group_command("off", alias={"关闭"})
     async def off_character(self, event: AstrMessageEvent):
         umo = event.unified_msg_origin
         if umo in self._active_characters:
             del self._active_characters[umo]
-            yield event.plain_result("Character roleplay disabled.")
+            yield event.plain_result("角色扮演已关闭。")
         else:
-            yield event.plain_result("No character is currently active.")
+            yield event.plain_result("当前没有激活的角色。")
 
     @filter.on_llm_request()
     async def inject_character_prompt(
@@ -74,9 +75,14 @@ class Main(star.Star):
             req.system_prompt = character_prompt + "\n\n" + req.system_prompt
         else:
             req.system_prompt = character_prompt
+        image_section = self.pkg_mgr.build_image_prompt_section(pkg)
+        if image_section:
+            req.extra_user_content_parts.append(
+                TextPart(text=image_section).mark_as_temp()
+            )
 
     @filter.on_llm_response()
-    async def process_character_response(
+    async def on_llm_response(
         self, event: AstrMessageEvent, resp: LLMResponse
     ) -> None:
         character_id = self._get_active_character(event.unified_msg_origin)
@@ -85,45 +91,67 @@ class Main(star.Star):
         pkg = await self.pkg_mgr.get_package(character_id)
         if not pkg or not pkg.enabled:
             return
-        if resp.role != "assistant" or not resp.result:
+
+    @filter.on_decorating_result()
+    async def decorate_result(self, event: AstrMessageEvent) -> None:
+        character_id = self._get_active_character(event.unified_msg_origin)
+        if not character_id:
             return
-        resp.result = resp.result
-
-    @filter.after_message_sent()
-    async def after_message_sent(self, event: AstrMessageEvent) -> None:
-        pass
-
-    async def enrich_message_with_images(
-        self, event: AstrMessageEvent, text: str, character_id: str
-    ) -> list:
         pkg = await self.pkg_mgr.get_package(character_id)
-        if not pkg:
-            return [Plain(text=text)]
+        if not pkg or not pkg.enabled:
+            return
 
-        cleaned_text, image_filenames = self.pkg_mgr.parse_image_markers(text)
-        components = []
-        if cleaned_text:
-            components.append(Plain(text=cleaned_text))
+        result = event.get_result()
+        if not result or not result.chain:
+            return
 
-        for filename in image_filenames:
-            img_path = self.pkg_mgr.get_image_path(pkg, filename)
-            if img_path and os.path.isfile(img_path):
-                try:
-                    components.append(Image.from_file(img_path))
-                except Exception as e:
-                    logger.warning(f"Failed to attach image {filename}: {e}")
+        new_chain = []
+        for comp in result.chain:
+            if isinstance(comp, Plain) and "[img:" in comp.text:
+                cleaned_text, image_filenames = self.pkg_mgr.parse_image_markers(comp.text)
+                if cleaned_text:
+                    new_chain.append(Plain(text=cleaned_text))
+                for filename in image_filenames:
+                    img_path = self.pkg_mgr.get_image_path(pkg, filename)
+                    if img_path and os.path.isfile(img_path):
+                        new_chain.append(Image.fromFileSystem(img_path))
+                    else:
+                        similar = self._find_similar_image(pkg, filename)
+                        if similar:
+                            new_chain.append(Image.fromFileSystem(similar))
+                        else:
+                            logger.warning(f"Character image not found: {filename}")
             else:
-                similar = self._find_similar_image(pkg, filename)
-                if similar:
+                new_chain.append(comp)
+
+        if pkg.tts_enabled and new_chain:
+            text_parts = [c.text for c in new_chain if isinstance(c, Plain)]
+            full_text = " ".join(text_parts).strip()
+            if full_text:
+                cached_audio = self.pkg_mgr.get_tts_cache_path(pkg, full_text)
+                if cached_audio:
+                    new_chain.append(Record.fromFileSystem(cached_audio, text=full_text))
+                else:
                     try:
-                        components.append(Image.from_file(similar))
+                        tts_provider = self.context.get_using_tts_provider(
+                            umo=event.unified_msg_origin
+                        )
+                        if tts_provider:
+                            audio_path = await tts_provider.get_audio(full_text)
+                            if audio_path and os.path.isfile(audio_path):
+                                ext = os.path.splitext(audio_path)[1] or ".wav"
+                                with open(audio_path, "rb") as af:
+                                    audio_bytes = af.read()
+                                saved_path = self.pkg_mgr.save_tts_cache(
+                                    pkg, full_text, audio_bytes, ext=ext
+                                )
+                                new_chain.append(
+                                    Record.fromFileSystem(saved_path, text=full_text)
+                                )
                     except Exception as e:
-                        logger.warning(f"Failed to attach fallback image: {e}")
+                        logger.warning(f"Character TTS failed: {e}")
 
-        if not components:
-            components.append(Plain(text=text))
-
-        return components
+        result.chain = new_chain
 
     def _find_similar_image(self, pkg, keyword: str) -> str | None:
         images = self.pkg_mgr.get_image_list(pkg)
