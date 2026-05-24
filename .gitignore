@@ -1,4 +1,15 @@
-﻿__pycache__/
+__pycache__/
 *.pyc
 *.zip
 data/tts_cache/
+
+# 运行时生成 — 用户隐私数据，不提交
+data/*/user_facts.json
+data/*/role_facts.json
+data/*/short_term.json
+data/*/medium_summaries.json
+data/*/long_term_facts.json
+data/*/msg_count.json
+data/*/raw_history.json
+data/*/raw_history.json.bak
+data/*/raw_history/

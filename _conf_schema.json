@@ -95,8 +95,8 @@
   },
   "long_term_enabled": {
     "type": "bool",
-    "description": "启用长期记忆",
-    "hint": "自动提取用户偏好和事实",
+    "description": "启用长期记忆(双通道)",
+    "hint": "自动提取 user_facts.json (永不出) 和 role_facts.json (可导出)。raw_history 按月分块归档，无上限",
     "default": true
   },
   "█ 表现控制": {
@@ -136,6 +136,19 @@
     "description": "限定频道",
     "hint": "每行一个会话ID，留空则所有频道生效",
     "default": ""
+  },
+  "█ 工具扩展": {
+    "type": "object",
+    "description": "LLM Function Calling — 天气/计算/搜索/Shell/时间",
+    "hint": "AI 可主动调用这些工具获取实时信息",
+    "items": {},
+    "invisible": true
+  },
+  "tools_enabled": {
+    "type": "bool",
+    "description": "启用工具扩展",
+    "hint": "开启后 LLM 可调用 weather/calculate/web_search/shell_exec/get_time 工具。Shell 仅白名单命令可用，危险命令自动拦截。",
+    "default": true
   },
   "█ 自动回复": {
     "type": "object",

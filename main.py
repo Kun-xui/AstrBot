@@ -2,6 +2,7 @@ import os
 import asyncio
 import json
 import random
+import re
 import traceback
 import sys
 
@@ -21,6 +22,7 @@ from .core.cleaner import Cleaner
 from .core.auto_reply import AutoReplyScheduler
 from .core.knowledge_updater import KnowledgeUpdater
 from .core.audio_injector import AudioInjector
+from .core import function_tools
 
 
 PLUGIN_DATA_DIR = "data"
@@ -55,7 +57,6 @@ class RoleplayPlugin(Star):
         self.emotion_engine = EmotionEngine()
         self.image_handler = ImageHandler()
         self.cleaner = Cleaner(self._get_llm_provider)
-        self._tts_alternate = True
         self.auto_reply = AutoReplyScheduler(plugin_ref=self)
         self.knowledge_updater = KnowledgeUpdater(plugin_ref=self)
         self.audio_injector = AudioInjector()
@@ -172,6 +173,15 @@ class RoleplayPlugin(Star):
             return ""
 
         parts = []
+
+        persona = cfg.get("persona", "")
+        if persona:
+            parts.append(persona)
+
+        enabled = self._config.get("tools_enabled", True) if self._config else True
+        if enabled:
+            parts.append(function_tools.get_tools_prompt_hint())
+
         reply_style = cfg.get("reply_style", {})
         allow_emoji = reply_style.get("allow_emoji", True) if isinstance(reply_style, dict) else True
 
@@ -202,10 +212,6 @@ class RoleplayPlugin(Star):
                 + "9. 每条回复控制在40字以内，越短越自然。"
             )
         parts.append(hard_rules)
-
-        persona = cfg.get("persona", "")
-        if persona:
-            parts.append(persona)
 
         background = cfg.get("background", [])
         if background:
@@ -271,18 +277,30 @@ class RoleplayPlugin(Star):
             if provider:
                 recent = self.memory_manager.get_short_term_context()
                 prompt = (
-                    "请从以下对话中提取1条关于用户的重要事实或偏好，"
-                    "如没有值得记录的信息请回复'NONE'。"
-                    f"\n\n{recent}"
+                    "请从以下对话中提取1条关于**用户**的重要事实或偏好，"
+                    "和1条关于**角色**应该记住的知识。用以下格式输出：\n\n"
+                    "USER: <关于用户的事实>\n"
+                    "ROLE: <关于角色的知识>\n\n"
+                    "如果某一行没有值得记录的信息，回复 NONE。\n\n"
+                    f"对话：\n{recent}"
                 )
                 result = await provider.text_chat(
                     prompt,
-                    system_prompt="只输出事实描述或NONE，不要其他内容。"
+                    system_prompt="只输出 USER: ... 和 ROLE: ... 格式，不要其他内容。"
                 )
                 text = result.completion_text if hasattr(result, 'completion_text') else str(result)
-                if text and text.strip().upper() != "NONE":
-                    self.memory_manager.add_long_term_fact(text.strip())
-                    logger.debug(f"提取长期事实: {text.strip()}")
+                if text:
+                    for line in text.strip().split("\n"):
+                        if line.upper().startswith("USER:") and "NONE" not in line.upper():
+                            fact = line[5:].strip()
+                            if fact:
+                                self.memory_manager.add_user_fact(fact)
+                                logger.debug(f"提取用户事实: {fact}")
+                        elif line.upper().startswith("ROLE:") and "NONE" not in line.upper():
+                            fact = line[5:].strip()
+                            if fact:
+                                self.memory_manager.add_role_fact(fact)
+                                logger.debug(f"提取角色知识: {fact}")
         except Exception as e:
             logger.error(f"提取长期事实失败: {e}")
 
@@ -423,6 +441,12 @@ class RoleplayPlugin(Star):
             desc="查看原始聊天记录"
         )
         self.context.register_web_api(
+            route="/roleplay/history/query",
+            view_handler=self._web_query_history,
+            methods=["GET"],
+            desc="二次查询原始记录(关键词/发送者/时间)"
+        )
+        self.context.register_web_api(
             route="/roleplay/history/clear",
             view_handler=self._web_clear_history,
             methods=["POST"],
@@ -488,6 +512,50 @@ class RoleplayPlugin(Star):
             methods=["GET"],
             desc="从可信任服务器获取音频列表"
         )
+
+    @llm_tool(name="weather")
+    async def _tool_weather(self, event: AstrMessageEvent, city: str) -> str:
+        '''查询指定城市的天气信息。
+
+        Args:
+            city(string): 城市名称，如"北京"、"上海"、"东京"
+        '''
+        return await function_tools.query_weather(city)
+
+    @llm_tool(name="calculate")
+    async def _tool_calculate(self, event: AstrMessageEvent, expression: str) -> str:
+        '''安全地计算数学表达式。
+
+        Args:
+            expression(string): 数学表达式，如"2+3*4"、"sqrt(16)"、"sin(pi/2)"
+        '''
+        return function_tools.safe_calculate(expression)
+
+    @llm_tool(name="web_search")
+    async def _tool_web_search(self, event: AstrMessageEvent, query: str) -> str:
+        '''搜索网络信息。
+
+        Args:
+            query(string): 搜索关键词
+        '''
+        return await function_tools.web_search(query)
+
+    @llm_tool(name="shell_exec")
+    async def _tool_shell_exec(self, event: AstrMessageEvent, cmd: str) -> str:
+        '''执行系统命令（仅白名单命令可用）。
+
+        Args:
+            cmd(string): 要执行的命令，如"dir"、"ping 127.0.0.1"、"echo hello"
+        '''
+        enabled = self._config.get("tools_enabled", True) if self._config else True
+        if not enabled:
+            return "[已禁用] 工具功能未开启"
+        return await function_tools.exec_shell(cmd)
+
+    @llm_tool(name="get_time")
+    async def _tool_get_time(self, event: AstrMessageEvent) -> str:
+        '''获取当前日期和时间。'''
+        return function_tools.get_current_time()
 
     def _json_response(self, data: dict, code: int = 200):
         from quart import Response
@@ -576,34 +644,33 @@ class RoleplayPlugin(Star):
             if role_config is None:
                 return self._json_response({"ok": False, "msg": f"角色 [{role_name}] 不存在"}, 400)
             if do_clean:
-                mem_stats = self.memory_manager.get_stats()
-                mem_stats = self.cleaner.strip_personal_data(mem_stats)
-                include_raw = data.get("include_raw", True)
-                raw = mem_stats.get("raw_history") if include_raw else None
+                export_mem = self.memory_manager.get_export_safe_data()
+                export_mem = self.cleaner.strip_personal_data(export_mem)
                 result_path = await self.cleaner.export_clean_zip(
                     self.role_manager.get_role_dir(role_name),
-                    mem_stats,
+                    export_mem,
                     role_config,
-                    include_raw=include_raw,
-                    raw_history=raw
+                    include_raw=False,
+                    raw_history=None
                 )
             else:
                 result_path = self.role_manager.export_role_zip(role_name)
                 include_memory = data.get("include_memory", True)
-                include_raw = data.get("include_raw", True)
-                if (include_memory or include_raw) and result_path:
+                include_raw = data.get("include_raw", False)
+                if include_memory and result_path:
                     import zipfile
                     import tempfile
                     import yaml as _yaml
-                    mem = self.memory_manager.get_stats()
-                    mem = self.cleaner.strip_personal_data(mem)
+                    export_mem = self.memory_manager.get_export_safe_data()
+                    export_mem = self.cleaner.strip_personal_data(export_mem)
                     extra_data = {}
                     if include_memory:
-                        extra_data["_memory_short_term.json"] = mem.get("short_term", [])
-                        extra_data["_memory_medium_summaries.json"] = mem.get("medium_summaries", [])
-                        extra_data["_memory_long_term_facts.json"] = mem.get("long_term_facts", [])
+                        extra_data["_memory_short_term.json"] = export_mem.get("short_term", [])
+                        extra_data["_memory_medium_summaries.json"] = export_mem.get("medium_summaries", [])
+                        extra_data["_memory_role_facts.json"] = export_mem.get("role_facts", [])
                     if include_raw:
-                        extra_data["_raw_history.json"] = mem.get("raw_history", [])
+                        raw = self.memory_manager.get_raw_history()
+                        extra_data["_raw_history.json"] = raw
                     tmp_zip = os.path.join(tempfile.gettempdir(), "_tmp_export.zip")
                     with zipfile.ZipFile(result_path, "r") as zf_in:
                         with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf_out:
@@ -649,9 +716,20 @@ class RoleplayPlugin(Star):
             return self._json_response({"ok": False, "msg": str(e)}, 500)
 
     async def _web_get_memory(self):
+        from quart import request
+        target = request.args.get("target", "all")
+        stats = self.memory_manager.get_stats()
+        if target == "user_facts":
+            return self._json_response({"ok": True, "user_facts": stats.get("user_facts", [])})
+        if target == "role_facts":
+            return self._json_response({"ok": True, "role_facts": stats.get("role_facts", [])})
+        if target == "summaries":
+            return self._json_response({"ok": True, "medium_summaries": stats.get("medium_summaries", [])})
+        if target == "short_term":
+            return self._json_response({"ok": True, "short_term": stats.get("short_term", [])})
         return self._json_response({
             "ok": True,
-            "memory": self.memory_manager.get_stats(),
+            "memory": stats,
             "role": self._active_role,
         })
 
@@ -673,8 +751,12 @@ class RoleplayPlugin(Star):
                 self.memory_manager.clear_short_term()
             elif target == "medium":
                 self.memory_manager.clear_medium()
-            elif target == "long":
-                self.memory_manager.clear_long_term()
+            elif target == "user_facts":
+                self.memory_manager.clear_user_facts()
+            elif target == "role_facts":
+                self.memory_manager.clear_role_facts()
+            elif target == "raw":
+                self.memory_manager.clear_raw_history()
             else:
                 self.memory_manager.clear_all()
             return self._json_response({"ok": True, "msg": f"已清除 [{target}] 记忆"})
@@ -684,6 +766,29 @@ class RoleplayPlugin(Star):
     async def _web_get_history(self):
         raw = self.memory_manager.get_raw_history()
         return self._json_response({"ok": True, "count": len(raw), "messages": raw})
+
+    async def _web_query_history(self):
+        from quart import request
+        if request.args.get("info") == "1":
+            info = self.memory_manager.get_raw_chunk_info()
+            return self._json_response({"ok": True, **info})
+        keyword = request.args.get("keyword", "")
+        sender = request.args.get("sender", "")
+        limit = int(request.args.get("limit", "50"))
+        before_ts = float(request.args.get("before", "0"))
+        after_ts = float(request.args.get("after", "0"))
+        month = request.args.get("month", "")
+        results = self.memory_manager.query_raw_history(
+            keyword=keyword, sender=sender, limit=limit,
+            before_ts=before_ts, after_ts=after_ts, month=month
+        )
+        total = sum(self.memory_manager._raw_index.values())
+        return self._json_response({
+            "ok": True,
+            "count": len(results),
+            "total": total,
+            "messages": results,
+        })
 
     async def _web_clear_history(self):
         self.memory_manager.clear_raw_history()
@@ -1031,77 +1136,91 @@ class RoleplayPlugin(Star):
                         _trace(f"on_decorating_result: stripped dots [{raw}] -> [{cleaned}]")
                     reply_text += comp.text.strip()
             _trace(f"on_decorating_result: reply_text length={len(reply_text)}")
-            if reply_text:
-                emotion_name, _, emotion_image_rel = self.emotion_engine.detect(reply_text)
-                _trace(f"on_decorating_result: emotion={emotion_name}, image={emotion_image_rel}")
-                if emotion_image_rel:
-                    role_dir = self._role_config.get("_role_dir", "")
-                    image_path = os.path.join(role_dir, emotion_image_rel)
-                    if os.path.exists(image_path):
-                        result.chain.insert(0, Image.fromFileSystem(image_path))
-                        logger.info(f"[roleplay] 附加情感图片: {emotion_image_rel}")
+            if not reply_text:
+                _trace("on_decorating_result: empty reply_text, skip")
+                return
+
+            cmd_tts = bool(re.search(r'\[(?:tts|语音)\]', reply_text, re.IGNORECASE))
+            audio_match = re.search(r'\[(?:audio|语气|voice):([^\]]+)\]', reply_text, re.IGNORECASE)
+            music_match = re.search(r'\[(?:music|音乐):([^\]]+)\]', reply_text, re.IGNORECASE)
+            cmd_audio_name = audio_match.group(1).strip() if audio_match else ""
+            cmd_music_name = music_match.group(1).strip() if music_match else ""
+
+            clean_text = re.sub(
+                r'\[(?:tts|语音|audio|语气|voice|music|音乐)(?::[^\]]*)?\]',
+                '', reply_text, flags=re.IGNORECASE
+            ).strip()
+            _trace(f"on_decorating_result: tts={cmd_tts}, audio={cmd_audio_name}, music={cmd_music_name}, clean_text_len={len(clean_text)}")
+
+            for comp in result.chain:
+                if hasattr(comp, "text"):
+                    comp.text = clean_text
+
+            emotion_name, _, emotion_image_rel = self.emotion_engine.detect(clean_text or reply_text)
+            _trace(f"on_decorating_result: emotion={emotion_name}, image={emotion_image_rel}")
+            if emotion_image_rel:
+                role_dir = self._role_config.get("_role_dir", "")
+                image_path = os.path.join(role_dir, emotion_image_rel)
+                if os.path.exists(image_path):
+                    result.chain.insert(0, Image.fromFileSystem(image_path))
+                    logger.info(f"[roleplay] 附加情感图片: {emotion_image_rel}")
+
+            did_tts = False
+            if cmd_tts and clean_text:
                 voice_config = self._role_config.get("voice", {})
                 tts_engine = voice_config.get("engine", "disabled")
-                tts_enabled = tts_engine != "disabled"
-                do_tts = tts_enabled and self._tts_alternate and len(reply_text) >= 5
-                _trace(f"on_decorating_result: tts_engine={tts_engine}, enabled={tts_enabled}, alternate={self._tts_alternate}, do_tts={do_tts}, text_len={len(reply_text)}")
-                if do_tts:
-                    tts_timeout = self._calc_tts_timeout(reply_text, self.tts_manager._models_loaded)
-                    _trace(f"on_decorating_result: tts_timeout={tts_timeout:.0f}s for {len(reply_text)} chars")
+                if tts_engine != "disabled":
+                    tts_timeout = self._calc_tts_timeout(clean_text, self.tts_manager._models_loaded)
+                    _trace(f"on_decorating_result: [tts] requested, engine={tts_engine}, timeout={tts_timeout:.0f}s")
                     try:
-                        _trace("on_decorating_result: calling TTS...")
                         audio_path = await asyncio.wait_for(
-                            self._get_tts_audio_path(reply_text), timeout=tts_timeout
+                            self._get_tts_audio_path(clean_text), timeout=tts_timeout
                         )
-                        _trace(f"on_decorating_result: TTS returned audio_path={audio_path}")
                         if audio_path and os.path.exists(audio_path):
                             audio_rec = Record.fromFileSystem(audio_path)
-                            new_chain = []
-                            for comp in result.chain:
-                                if not isinstance(comp, Plain):
-                                    new_chain.append(comp)
+                            new_chain = [c for c in result.chain if not isinstance(c, Plain)]
                             new_chain.append(audio_rec)
                             result.chain.clear()
                             result.chain.extend(new_chain)
-                            logger.info(f"[roleplay] 替换为语音: {audio_path}")
-                            _trace("on_decorating_result: replaced text with audio in chain")
+                            did_tts = True
+                            logger.info(f"[roleplay] [tts] 替换为语音: {audio_path}")
+                            _trace("on_decorating_result: replaced text with TTS audio")
                         elif audio_path:
-                            _trace(f"on_decorating_result: audio_path exists but file missing: {audio_path}")
+                            _trace(f"on_decorating_result: TTS file missing: {audio_path}")
                         else:
                             _trace("on_decorating_result: TTS returned None")
                     except asyncio.TimeoutError:
-                        logger.warning(f"[roleplay] TTS 超时({tts_timeout}s)，跳过语音")
-                        _trace(f"on_decorating_result: TTS TIMEOUT after {tts_timeout}s")
+                        logger.warning(f"[roleplay] [tts] TTS 超时({tts_timeout}s)，保留文字")
                     except Exception:
-                        logger.warning(f"[roleplay] TTS 失败: {traceback.format_exc()}")
-                        _trace(f"on_decorating_result: TTS EXCEPTION: {traceback.format_exc()}")
-                self._tts_alternate = not self._tts_alternate
-                _trace(f"on_decorating_result: next alternate={self._tts_alternate}")
+                        logger.warning(f"[roleplay] [tts] TTS 失败: {traceback.format_exc()}")
 
-                has_audio_in_chain = any(isinstance(c, Record) for c in result.chain)
-                if not has_audio_in_chain and self.audio_injector and self.audio_injector.is_loaded:
-                    audio_rel = None
-                    music_file = self.audio_injector.match_music(reply_text)
-                    if music_file:
-                        audio_rel = music_file
-                        _trace(f"on_decorating_result: music matched -> {music_file}")
-                    if not audio_rel:
-                        dw_file = self.audio_injector.match_daily_word(reply_text)
-                        if dw_file:
-                            audio_rel = dw_file
-                            _trace(f"on_decorating_result: daily_word matched -> {dw_file}")
-                    if not audio_rel:
-                        expr_file = self.audio_injector.get_expression(emotion_name)
-                        if expr_file:
-                            audio_rel = expr_file
-                            _trace(f"on_decorating_result: expression matched emotion={emotion_name} -> {expr_file}")
-                    if audio_rel:
-                        audio_path = self.audio_injector.resolve_audio_for_record(audio_rel)
-                        if audio_path and os.path.exists(audio_path):
-                            audio_rec = Record.fromFileSystem(audio_path)
-                            result.chain.append(audio_rec)
-                            logger.info(f"[roleplay] 注入语气词音频: {os.path.basename(audio_path)}")
-                            _trace(f"on_decorating_result: injected audio {audio_path}")
+            if not did_tts and not clean_text:
+                clean_text = reply_text
+                for comp in result.chain:
+                    if hasattr(comp, "text"):
+                        comp.text = clean_text
+
+            if cmd_audio_name and self.audio_injector and self.audio_injector.is_loaded:
+                audio_rel = self.audio_injector.get_expression(cmd_audio_name)
+                if not audio_rel:
+                    audio_rel = self.audio_injector.get_daily_word(cmd_audio_name)
+                if not audio_rel:
+                    audio_rel = self.audio_injector.match_music(cmd_audio_name)
+                if audio_rel:
+                    audio_path = self.audio_injector.resolve_audio_for_record(audio_rel)
+                    if audio_path and os.path.exists(audio_path):
+                        result.chain.append(Record.fromFileSystem(audio_path))
+                        logger.info(f"[roleplay] 附加语气词音频: {os.path.basename(audio_path)}")
+                        _trace(f"on_decorating_result: injected audio {audio_path}")
+
+            if cmd_music_name and self.audio_injector and self.audio_injector.is_loaded:
+                music_file = self.audio_injector.match_music(cmd_music_name)
+                if music_file:
+                    audio_path = self.audio_injector.resolve_audio_for_record(music_file)
+                    if audio_path and os.path.exists(audio_path):
+                        result.chain.append(Record.fromFileSystem(audio_path))
+                        logger.info(f"[roleplay] 附加音乐: {os.path.basename(audio_path)}")
+                        _trace(f"on_decorating_result: music injected {audio_path}")
         except Exception:
             logger.error(f"on_decorating_result 处理失败: {traceback.format_exc()}")
             _trace(f"on_decorating_result EXCEPTION: {traceback.format_exc()}")
@@ -1117,19 +1236,21 @@ class RoleplayPlugin(Star):
             _trace("after_message_sent: channel not allowed")
             return
         try:
-            sender_name = ""
+            user_message = ""
             try:
-                sender_name = event.get_sender_name()
-            except Exception:
-                sender_name = "user"
-            message_text = ""
-            try:
-                message_text = event.message_str or ""
+                user_message = (event.message_str or "").strip()
             except Exception:
                 pass
-            message_text = message_text.strip()
-            if message_text:
-                self.memory_manager.add_message(sender_name, message_text)
+            if user_message:
+                self.memory_manager.add_user_message(user_message)
+            result = event.get_result()
+            if result and result.chain:
+                bot_reply = ""
+                for comp in result.chain:
+                    if hasattr(comp, "text") and comp.text:
+                        bot_reply += comp.text.strip()
+                if bot_reply:
+                    self.memory_manager.add_bot_message(bot_reply)
             asyncio.create_task(self._background_memory_work(event))
             _trace("after_message_sent: memory task created")
         except Exception:
@@ -1183,7 +1304,9 @@ class RoleplayPlugin(Star):
                 f"描述: {cfg.get('persona', '')[:100]}...\n"
                 f"短期记忆: {mem['short_term_count']}条\n"
                 f"中期摘要: {mem['medium_summary_count']}份\n"
-                f"长期事实: {mem['long_term_fact_count']}条"
+                f"用户事实: {mem['user_fact_count']}条\n"
+                f"角色知识: {mem['role_fact_count']}条\n"
+                f"原始记录: {mem['raw_history_count']}条"
             )
         else:
             yield event.plain_result("当前未激活角色")
@@ -2269,7 +2392,9 @@ var mem = mr.memory||{};
 document.getElementById('statsRow').innerHTML =
 '<div class="stat-box"><div class="num">' + (r&&r.roles?r.roles.length:'-') + '</div><div class="label">已安装角色</div></div>'
 + '<div class="stat-box"><div class="num">' + (mem.short_term_count||0) + '</div><div class="label">短期记忆</div></div>'
-+ '<div class="stat-box"><div class="num">' + (mem.long_term_fact_count||0) + '</div><div class="label">长期事实</div></div>';
++ '<div class="stat-box"><div class="num">' + (mem.medium_summary_count||0) + '</div><div class="label">对话摘要</div></div>'
++ '<div class="stat-box"><div class="num">' + (mem.user_fact_count||0) + '</div><div class="label">用户事实</div></div>'
++ '<div class="stat-box"><div class="num">' + (mem.role_fact_count||0) + '</div><div class="label">角色知识</div></div>';
 loadARStatus();
 loadKBStatus();
 } catch(e) {}

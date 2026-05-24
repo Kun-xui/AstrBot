@@ -86,6 +86,11 @@ class AudioInjector:
                 return random.choice(files)
         return None
 
+    def get_daily_word(self, keyword: str) -> str | None:
+        if keyword in self._daily_words:
+            return random.choice(self._daily_words[keyword])
+        return None
+
     def _filename_matches(self, filepath: str, keyword: str) -> bool:
         name = os.path.splitext(os.path.basename(filepath))[0]
         return keyword in name
@@ -131,15 +136,25 @@ class AudioInjector:
     def get_music_keywords(self) -> list[str]:
         return list(self._music.keys())
 
+    def get_available_emotions(self) -> list[str]:
+        return list(self._expressions.keys())
+
+    def get_available_daily_words(self) -> list[str]:
+        return list(self._daily_words.keys())
+
     def get_capability_hint(self) -> str:
-        hints = []
-        if self._expressions:
-            hints.append("你可以通过语气表达情绪")
-        if self._daily_words:
-            dw_keys = list(self._daily_words.keys())[:8]
-            hints.append(f"你的常用语气词包括: {', '.join(dw_keys)}等")
-        if self._music:
-            hints.append(f"你可以唱的歌有: {', '.join(list(self._music.keys()))}")
-        if hints:
-            return "\n".join(hints)
-        return ""
+        lines = []
+        lines.append("# 音频命令（主动控制音频发送）")
+        lines.append("你可以在回复中使用以下标签来请求音频，标签会被自动移除，用户不会看到：")
+        lines.append("- `[tts]` 或 `[语音]`：将本条消息转为语音发送（文字不显示，只发语音）")
+        emo_list = list(self._expressions.keys())
+        dw_list = list(self._daily_words.keys())
+        all_audio_keys = sorted(set(emo_list + dw_list))
+        if all_audio_keys:
+            sample = all_audio_keys[:15]
+            lines.append(f"- `[audio:名称]` 或 `[语气:名称]`：附加语气词音频。可选: {', '.join(sample)}")
+        music_list = list(self._music.keys())
+        if music_list:
+            lines.append(f"- `[music:歌名]` 或 `[音乐:歌名]`：附加音乐音频。可选: {', '.join(music_list)}")
+        lines.append("- 不使用任何标签时，消息以纯文本发送。这是默认行为，不必每次都用标签。")
+        return "\n".join(lines)

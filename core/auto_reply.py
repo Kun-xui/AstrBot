@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 import time
 import os
 import json
@@ -56,8 +57,10 @@ class AutoReplyScheduler:
     async def start(self):
         if self._task and not self._task.done():
             return
+        self._next_check_time = time.time() + self._random_interval() * 60
         self._task = asyncio.create_task(self._run())
-        logger.info("[AutoReply] 调度器已启动")
+        next_dt = datetime.fromtimestamp(self._next_check_time)
+        logger.info(f"[AutoReply] 调度器已启动，首次检查时间: {next_dt.strftime('%Y-%m-%d %H:%M')}")
 
     async def stop(self):
         if self._task:
@@ -79,7 +82,7 @@ class AutoReplyScheduler:
             return False
 
     async def _run(self):
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
         while True:
             try:
                 if not self._enabled or not self._plugin or not self._plugin._enabled:
@@ -151,22 +154,89 @@ class AutoReplyScheduler:
             if not provider:
                 return False
             system = f"你是{role_name}，以下是你的设定:\n{persona}"
+            audio_injector = getattr(self._plugin, 'audio_injector', None)
+            if audio_injector and audio_injector.is_loaded:
+                hint_text = audio_injector.get_capability_hint()
+                if hint_text:
+                    system += "\n\n" + hint_text
             reply = await provider.text_chat(hint, system_prompt=system)
             reply_text = reply.completion_text if hasattr(reply, 'completion_text') else str(reply)
             if not reply_text or len(reply_text.strip()) < 2:
                 return False
             reply_text = reply_text.strip()
             logger.info(f"[AutoReply] 自动回复内容: {reply_text[:80]}")
+
             channels_text = self._plugin._config.get("role_channels", "") if self._plugin._config else ""
-            if channels_text and channels_text.strip():
-                channels = channels_text.strip().split("\n")
-                self._plugin._context.send_message(
-                    channels[0].strip(),
-                    reply_text
-                )
-                logger.info(f"[AutoReply] 已发送自动回复到: {channels[0].strip()}")
-                return True
-            return False
+            if not channels_text or not channels_text.strip():
+                return False
+            channels = channels_text.strip().split("\n")
+            channel_id = channels[0].strip()
+
+            cmd_tts = bool(re.search(r'\[(?:tts|语音)\]', reply_text, re.IGNORECASE))
+            audio_match = re.search(r'\[(?:audio|语气|voice):([^\]]+)\]', reply_text, re.IGNORECASE)
+            music_match = re.search(r'\[(?:music|音乐):([^\]]+)\]', reply_text, re.IGNORECASE)
+            cmd_audio_name = audio_match.group(1).strip() if audio_match else ""
+            cmd_music_name = music_match.group(1).strip() if music_match else ""
+
+            clean_text = re.sub(
+                r'\[(?:tts|语音|audio|语气|voice|music|音乐)(?::[^\]]*)?\]',
+                '', reply_text, flags=re.IGNORECASE
+            ).strip()
+
+            did_tts = False
+            if cmd_tts and clean_text:
+                tts_mgr = getattr(self._plugin, 'tts_manager', None)
+                voice_config = role_cfg.get("voice", {})
+                tts_engine = voice_config.get("engine", "disabled")
+                if tts_mgr and tts_engine != "disabled":
+                    try:
+                        audio_path = await tts_mgr.synthesize(
+                            clean_text, voice_config,
+                            role_dir=role_cfg.get("_role_dir", "")
+                        )
+                        if audio_path and os.path.exists(audio_path):
+                            from astrbot.api.message_components import Record
+                            audio_rec = Record.fromFileSystem(audio_path)
+                            self._plugin._context.send_message(channel_id, audio_rec)
+                            did_tts = True
+                            logger.info(f"[AutoReply] [tts] 语音发送: {os.path.basename(audio_path)}")
+                    except Exception as e:
+                        logger.warning(f"[AutoReply] [tts] TTS失败: {e}")
+
+            if not did_tts:
+                self._plugin._context.send_message(channel_id, clean_text or reply_text)
+                logger.info(f"[AutoReply] 已发送自动回复到: {channel_id}")
+
+            if audio_injector and audio_injector.is_loaded:
+                if cmd_audio_name:
+                    audio_rel = audio_injector.get_expression(cmd_audio_name)
+                    if not audio_rel:
+                        audio_rel = audio_injector.get_daily_word(cmd_audio_name)
+                    if audio_rel:
+                        audio_path = audio_injector.resolve_audio_for_record(audio_rel)
+                        if audio_path and os.path.exists(audio_path):
+                            try:
+                                from astrbot.api.message_components import Record
+                                audio_rec = Record.fromFileSystem(audio_path)
+                                self._plugin._context.send_message(channel_id, audio_rec)
+                                logger.info(f"[AutoReply] 附加语气词音频: {os.path.basename(audio_path)}")
+                            except Exception as e:
+                                logger.debug(f"[AutoReply] 音频发送失败: {e}")
+
+                if cmd_music_name:
+                    music_file = audio_injector.match_music(cmd_music_name)
+                    if music_file:
+                        audio_path = audio_injector.resolve_audio_for_record(music_file)
+                        if audio_path and os.path.exists(audio_path):
+                            try:
+                                from astrbot.api.message_components import Record
+                                audio_rec = Record.fromFileSystem(audio_path)
+                                self._plugin._context.send_message(channel_id, audio_rec)
+                                logger.info(f"[AutoReply] 附加音乐: {os.path.basename(audio_path)}")
+                            except Exception as e:
+                                logger.debug(f"[AutoReply] 音乐发送失败: {e}")
+
+            return True
         except Exception as e:
             logger.error(f"[AutoReply] 生成回复失败: {e}")
             return False

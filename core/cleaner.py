@@ -33,13 +33,13 @@ class Cleaner:
                 raw_history.append({"sender": "role", "content": msg.get("content", ""), "time": msg.get("time", 0)})
             else:
                 raw_history.append(msg)
-        long_facts = []
-        for fact in memory_stats.get("long_term_facts", []):
-            long_facts.append(fact)
+        role_facts = []
+        for fact in memory_stats.get("role_facts", []):
+            role_facts.append(fact)
         return {
             "short_term": short,
             "medium_summaries": memory_stats.get("medium_summaries", []),
-            "long_term_facts": long_facts,
+            "role_facts": role_facts,
             "raw_history": raw_history,
         }
 
