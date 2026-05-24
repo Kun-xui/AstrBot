@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>角色插件库 - kunxun.top</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
+  
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Noto Sans SC', sans-serif;
+    background: #0a0a12;
+    color: #e0e0e0;
+    min-height: 100vh;
+  }
+  
+  /* Header */
+  header {
+    background: linear-gradient(135deg, #0f0f1a 0%, #1a1040 50%, #0f0f1a 100%);
+    border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+    padding: 40px 20px 30px;
+    text-align: center;
+  }
+  header h1 {
+    font-size: 2em;
+    font-weight: 700;
+    background: linear-gradient(135deg, #c084fc, #818cf8);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  header p {
+    color: #888;
+    font-size: 0.95em;
+  }
+  header .count {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 4px 16px;
+    background: rgba(139, 92, 246, 0.15);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    border-radius: 20px;
+    font-size: 0.85em;
+    color: #a78bfa;
+  }
+  
+  /* Search & Filter */
+  .toolbar {
+    max-width: 1100px;
+    margin: 24px auto 16px;
+    padding: 0 20px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .search-box {
+    flex: 1;
+    min-width: 200px;
+    position: relative;
+  }
+  .search-box input {
+    width: 100%;
+    padding: 10px 16px 10px 40px;
+    border-radius: 12px;
+    border: 1px solid #2a2a3e;
+    background: #12121e;
+    color: #e0e0e0;
+    font-size: 0.9em;
+    outline: none;
+    transition: border 0.3s;
+  }
+  .search-box input:focus { border-color: #7c3aed; }
+  .search-box .icon {
+    position: absolute; left: 14px; top: 50%;
+    transform: translateY(-50%);
+    color: #555; font-size: 1em;
+  }
+  .tag-filter {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .tag-filter button {
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid #2a2a3e;
+    background: #12121e;
+    color: #999;
+    cursor: pointer;
+    font-size: 0.82em;
+    transition: all 0.2s;
+  }
+  .tag-filter button:hover {
+    border-color: #7c3aed;
+    color: #c084fc;
+  }
+  .tag-filter button.active {
+    background: #7c3aed;
+    color: #fff;
+    border-color: #7c3aed;
+  }
+  
+  /* Grid */
+  .grid {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 20px 60px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 20px;
+  }
+  
+  /* Card */
+  .card {
+    background: linear-gradient(145deg, #14142a, #1a1a30);
+    border-radius: 16px;
+    border: 1px solid #2a2a4e;
+    overflow: hidden;
+    transition: all 0.3s ease;
+    cursor: pointer;
+    position: relative;
+  }
+  .card:hover {
+    transform: translateY(-4px);
+    border-color: rgba(139, 92, 246, 0.4);
+    box-shadow: 0 12px 40px rgba(100, 60, 255, 0.15);
+  }
+  
+  .card-preview {
+    width: 100%;
+    height: 180px;
+    background: linear-gradient(135deg, #1a1a3e, #2a1a5e);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 3em;
+    color: #6d28d9;
+    position: relative;
+    overflow: hidden;
+  }
+  .card-preview img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .card-preview .placeholder {
+    font-size: 3.5em;
+    opacity: 0.3;
+  }
+  .card-preview .tags-row {
+    position: absolute;
+    top: 10px; left: 10px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .card-preview .tag {
+    padding: 2px 10px;
+    border-radius: 10px;
+    background: rgba(0,0,0,0.5);
+    backdrop-filter: blur(4px);
+    font-size: 0.72em;
+    color: #ddd;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  
+  .card-body {
+    padding: 16px 18px 18px;
+  }
+  .card-body h3 {
+    font-size: 1.05em;
+    font-weight: 600;
+    color: #f0f0ff;
+    margin-bottom: 6px;
+  }
+  .card-body .author {
+    font-size: 0.78em;
+    color: #888;
+    margin-bottom: 10px;
+  }
+  .card-body .author::before { content: "👤 "; }
+  .card-body .desc {
+    font-size: 0.85em;
+    color: #aaa;
+    line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    margin-bottom: 14px;
+  }
+  .card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .card-footer .version {
+    font-size: 0.75em;
+    color: #666;
+  }
+  .card-footer .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: 10px;
+    border: none;
+    background: linear-gradient(135deg, #7c3aed, #6366f1);
+    color: #fff;
+    font-size: 0.8em;
+    text-decoration: none;
+    transition: all 0.2s;
+  }
+  .card-footer .btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 16px rgba(124, 58, 237, 0.4);
+  }
+  .card-footer .btn.dl {
+    background: linear-gradient(135deg, #059669, #10b981);
+  }
+  .card-footer .btn.dl:hover {
+    box-shadow: 0 4px 16px rgba(16, 185, 129, 0.4);
+  }
+  
+  /* Empty */
+  .empty {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 80px 20px;
+    color: #666;
+  }
+  .empty .icon { font-size: 3em; margin-bottom: 12px; opacity: 0.5; }
+  
+  /* Footer */
+  footer {
+    text-align: center;
+    padding: 30px 20px;
+    border-top: 1px solid #1a1a2e;
+    color: #555;
+    font-size: 0.8em;
+  }
+  
+  @media (max-width: 640px) {
+    header h1 { font-size: 1.5em; }
+    .grid { grid-template-columns: 1fr; }
+  }
+
+  /* Loading */
+  .loading {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 100px 20px;
+  }
+  .loading .spinner {
+    width: 36px; height: 36px;
+    border: 3px solid #2a2a4e;
+    border-top: 3px solid #7c3aed;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin: 0 auto 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎭 角色包目录</h1>
+  <p>AstrBot · 一键导入 · 语音 · 立绘</p>
+  <div style="margin-top: 14px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
+    <a href="/upload" style="
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 20px; border-radius: 12px; border: none;
+      background: linear-gradient(135deg, #e94560, #d63384);
+      color: #fff; font-size: 0.85em; text-decoration: none;
+      font-weight: 500; transition: all 0.2s;
+    " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform=''">
+      📤 上传角色
+    </a>
+    <a href="/create" style="
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 8px 20px; border-radius: 12px; border: none;
+      background: linear-gradient(135deg, #7c3aed, #6366f1);
+      color: #fff; font-size: 0.85em; text-decoration: none;
+      font-weight: 500; transition: all 0.2s;
+    " onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform=''">
+      ✨ 创建角色
+    </a>
+  </div>
+  <div class="count" id="count">加载中...</div>
+</header>
+
+<div class="toolbar">
+  <div class="search-box">
+    <span class="icon">🔍</span>
+    <input type="text" id="search" placeholder="搜索角色名称..." oninput="render()">
+  </div>
+  <div class="tag-filter" id="tagFilter"></div>
+</div>
+
+<div class="grid" id="grid">
+  <div class="loading">
+    <div class="spinner"></div>
+    <span>正在加载插件列表...</span>
+  </div>
+</div>
+
+<footer>
+  kunxun.top · 角色插件目录<br>
+  <span id="footerBandwidth" style="color:#666;font-size:0.85em"></span><br>
+  <a href="/create" style="color:#a78bfa;text-decoration:none">✨ 创建角色</a>
+  · <a href="/upload" style="color:#e94560;text-decoration:none">📤 上传角色</a>
+</footer>
+
+<script>
+let plugins = [];
+let activeTag = '';
+
+async function load() {
+  try {
+    const res = await fetch('/api/plugins.json');
+    plugins = await res.json();
+    
+    // 收集所有标签
+    const tags = [...new Set(plugins.flatMap(p => p.tags))];
+    const container = document.getElementById('tagFilter');
+    container.innerHTML = '<button class="active" onclick="setTag(\'\')">全部</button>' +
+      tags.map(t => `<button onclick="setTag('${t}')">${t}</button>`).join('');
+    
+    document.getElementById('count').textContent = `共 ${plugins.length} 个角色包`;
+    render();
+  } catch(e) {
+    document.getElementById('grid').innerHTML = `<div class="empty"><div class="icon">😅</div><p>加载失败，请稍后再试</p></div>`;
+    document.getElementById('count').textContent = '加载失败';
+  }
+}
+
+function setTag(tag) {
+  activeTag = tag;
+  document.querySelectorAll('#tagFilter button').forEach(b => b.className = b.textContent === tag || (tag === '' && b.textContent === '全部') ? 'active' : '');
+  render();
+}
+
+function render() {
+  const q = document.getElementById('search').value.toLowerCase();
+  const filtered = plugins.filter(p => {
+    const matchSearch = !q || p.name.includes(q) || p.desc.includes(q) || p.author.toLowerCase().includes(q);
+    const matchTag = !activeTag || p.tags.includes(activeTag);
+    return matchSearch && matchTag;
+  });
+  
+  const grid = document.getElementById('grid');
+  if (filtered.length === 0) {
+    grid.innerHTML = `<div class="empty"><div class="icon">🔍</div><p>没有找到匹配的角色包</p></div>`;
+  } else {
+    grid.innerHTML = filtered.map(p => `
+      <div class="card">
+        <div class="card-preview">
+          ${p.preview && p.preview !== '/previews/default.jpg'
+            ? `<img src="${p.preview}" alt="${p.name}" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" loading="lazy">
+               <div class="placeholder" style="display:none">🎭</div>`
+            : `<div class="placeholder">🎭</div>`}
+          <div class="tags-row">${p.tags.map(t => `<span class="tag">${t}</span>`).join('')}</div>
+        </div>
+        <div class="card-body">
+          <h3>${p.name}</h3>
+          <div class="author">${p.author}</div>
+          <div class="desc">${p.desc}</div>
+          <div class="card-footer">
+            <span class="version">v${p.version} · ${p.updated}</span>
+            <div style="display:flex;gap:8px">
+              ${p.download ? `<a href="${p.download}" class="btn dl" target="_blank" rel="noopener">📦 下载</a>` : ''}
+              <a href="${p.github}" class="btn" target="_blank" rel="noopener">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+                GitHub
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    `).join('');
+  }
+  
+  document.getElementById('count').textContent = `共 ${plugins.length} 个角色包 · 显示 ${filtered.length} 个`;
+}
+
+load();
+
+// 加载服务器带宽信息
+fetch('/api/server/info').then(r => r.json()).then(info => {
+  document.getElementById('footerBandwidth').textContent = `📶 服务器带宽 ${info.bandwidth_mbs}MB/s · 单文件上限50MB`;
+}).catch(() => {
+  document.getElementById('footerBandwidth').textContent = '📶 服务器带宽约 1.2MB/s';
+});
+</script>
+</body>
+</html>

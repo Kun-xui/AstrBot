@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>kunxun.top - 上传分享</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #1a1a2e; color: #e0e0e0; min-height: 100vh; padding:20px;
+}
+.container { max-width:600px; margin:40px auto; }
+h1 { text-align:center; color:#e94560; font-size:1.5em; margin-bottom:4px; }
+.sub { text-align:center; color:#888; font-size:0.85em; margin-bottom:24px; }
+
+.card {
+  background:#1a1a2e; border:1px solid #2a2a4a; border-radius:16px;
+  padding:28px; margin-bottom:16px;
+}
+.card h2 { font-size:1em; margin-bottom:16px; color:#e94560; }
+
+label { display:block; font-size:0.85em; color:#888; margin-bottom:4px; margin-top:12px; }
+label:first-child { margin-top:0; }
+select, input[type=text], input[type=file] {
+  width:100%; padding:10px 14px; border-radius:10px; border:1px solid #2a2a4a;
+  background:#16213e; color:#e0e0e0; font-size:0.9em; outline:none;
+  font-family:inherit;
+}
+select:focus, input:focus { border-color:#e94560; }
+input[type=file] { padding:8px; }
+.file-info { font-size:0.8em; color:#666; margin-top:4px; }
+
+.btn {
+  width:100%; padding:12px; margin-top:16px;
+  border-radius:10px; border:none; background:#e94560; color:#fff;
+  font-size:1em; cursor:pointer; font-weight:600; font-family:inherit;
+}
+.btn:hover { opacity:0.9; }
+.btn:disabled { opacity:0.5; cursor:not-allowed; }
+.btn-secondary { background:transparent; border:1px solid #2a2a4a; color:#888; margin-top:8px; }
+
+.result-box {
+  display:none; margin-top:16px; padding:16px; border-radius:10px;
+  background:#16213e; border:1px solid #2a2a4a; font-size:0.9em;
+}
+.result-box.success { border-color:#00c853; }
+.result-box.error { border-color:#ef4444; }
+
+.roles-loading { text-align:center; color:#666; padding:10px; font-size:0.85em; }
+
+.footer { text-align:center; color:#555; font-size:0.8em; margin-top:32px; }
+.footer a { color:#e94560; text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>kunxun.top</h1>
+  <div class="sub">角色音频/图片上传分享</div>
+  
+  <div class="card">
+    <h2>📤 上传文件</h2>
+    <label>选择角色</label>
+    <select id="roleSelect"><option value="">加载中...</option></select>
+    
+    <label>上传类型</label>
+    <select id="uploadType" onchange="toggleUploadMode()">
+      <option value="auto">自动识别（图片/音频/ZIP）</option>
+      <option value="image">🖼️ 图片</option>
+      <option value="audio">🎵 音频</option>
+      <option value="zip">📦 压缩包（批量上传）</option>
+    </select>
+    
+    <label>选择文件</label>
+    <input type="file" id="fileInput" onchange="updateFileInfo()">
+    <div class="file-info" id="fileInfo">未选择文件</div>
+    
+    <button class="btn" id="uploadBtn" onclick="uploadFile()">上传</button>
+    <div id="uploadResult" class="result-box"></div>
+  </div>
+  
+  <div class="card" style="text-align:center;padding:16px">
+    <div style="font-size:0.85em;color:#888">
+      ⚠️ 上传后需管理员审核通过才能公开
+    </div>
+  </div>
+  
+  <div class="footer">
+    kunxun.top 角色分享服务器 v2.0
+  </div>
+</div>
+
+<script>
+// 生成设备ID（浏览器指纹）
+function getDeviceId() {
+  let did = localStorage.getItem('kx_device_id');
+  if (!did) {
+    did = 'web_' + Math.random().toString(36).substr(2, 12) + '_' + Date.now().toString(36);
+    localStorage.setItem('kx_device_id', did);
+  }
+  return did;
+}
+
+// 加载角色列表
+async function loadRoles() {
+  const sel = document.getElementById('roleSelect');
+  try {
+    const res = await fetch('/api/roles', {
+      headers: { 'X-Device-ID': getDeviceId() }
+    });
+    const roles = await res.json();
+    if (roles && roles.length) {
+      sel.innerHTML = roles.map(r => `<option value="${r.name}">${r.name} (v${r.version})</option>`).join('');
+    } else {
+      sel.innerHTML = '<option value="">暂无可用角色</option>';
+    }
+  } catch(e) {
+    sel.innerHTML = '<option value="">加载失败</option>';
+  }
+}
+
+function updateFileInfo() {
+  const file = document.getElementById('fileInput').files[0];
+  document.getElementById('fileInfo').textContent = file ? `${file.name} (${(file.size/1024).toFixed(1)}KB)` : '未选择文件';
+}
+
+function toggleUploadMode() {
+  document.getElementById('fileInput').value = '';
+  document.getElementById('fileInfo').textContent = '未选择文件';
+  document.getElementById('uploadResult').style.display = 'none';
+}
+
+async function uploadFile() {
+  const btn = document.getElementById('uploadBtn');
+  const file = document.getElementById('fileInput').files[0];
+  const role = document.getElementById('roleSelect').value;
+  const type = document.getElementById('uploadType').value;
+  const resultDiv = document.getElementById('uploadResult');
+  
+  if (!file) { showResult('请选择文件', 'error'); return; }
+  if (!role) { showResult('请选择角色', 'error'); return; }
+  
+  btn.disabled = true;
+  btn.textContent = '上传中...';
+  resultDiv.style.display = 'none';
+  
+  const form = new FormData();
+  form.append('file', file);
+  
+  let url = '';
+  
+  if (type === 'auto') {
+    const ext = file.name.split('.').pop().toLowerCase();
+    if (['mp3','wav','ogg','flac'].includes(ext)) {
+      url = `/api/roles/${encodeURIComponent(role)}/audio`;
+      form.append('category', 'expressions');
+    } else if (['jpg','jpeg','png','gif','webp'].includes(ext)) {
+      url = `/api/roles/${encodeURIComponent(role)}/images`;
+    } else if (['zip','rar','7z'].includes(ext)) {
+      url = `/api/roles/${encodeURIComponent(role)}/push`;
+    } else {
+      showResult('不支持的文件格式', 'error');
+      btn.disabled = false; btn.textContent = '上传';
+      return;
+    }
+  } else if (type === 'audio') {
+    url = `/api/roles/${encodeURIComponent(role)}/audio`;
+    form.append('category', 'expressions');
+  } else if (type === 'image') {
+    url = `/api/roles/${encodeURIComponent(role)}/images`;
+  } else if (type === 'zip') {
+    url = `/api/roles/${encodeURIComponent(role)}/push`;
+  }
+  
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'X-Device-ID': getDeviceId() },
+      body: form
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showResult(`✅ 上传成功！文件已进入审核队列，等待管理员审核公开。`, 'success');
+    } else {
+      showResult(`❌ ${data.error || '上传失败'}`, 'error');
+    }
+  } catch(e) {
+    showResult('❌ 网络错误，请重试', 'error');
+  }
+  
+  btn.disabled = false;
+  btn.textContent = '上传';
+}
+
+function showResult(msg, type) {
+  const el = document.getElementById('uploadResult');
+  el.textContent = msg;
+  el.className = 'result-box ' + type;
+  el.style.display = 'block';
+}
+
+loadRoles();
+</script>
+</body>
+</html>

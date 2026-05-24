@@ -154,11 +154,13 @@ chown, sudo, su, $(...), ${...}, >/dev/*, >/etc/*, | sh, | bash
 
 ```bash
 cd server/
-pip install flask pyyaml bcrypt
-copy config.example.yaml config.yaml
+pip install flask pyyaml bcrypt pypinyin
+cp config.example.yaml config.yaml
 python server.py
 # → http://你的IP:8766  管理后台 → http://你的IP:8766/admin
 ```
+
+详细说明见 [`server/README.md`](server/README.md) — 包含 Nginx 反代配置、审核模式、安全提醒。
 
 ### 隐私保证
 

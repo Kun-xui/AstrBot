@@ -1,22 +1,7 @@
-# 角色分享服务器配置
-# 复制此文件为 config.yaml 并修改
-
 host: "0.0.0.0"
-port: 8765
-
-# 认证模式
-# open: 任何人可下载,不检查设备ID
-# auto_register: 新的设备自动注册(推荐)
-# admin_approve: 新设备需管理员在WebUI手动批准
+port: 8766
 auth_mode: "auto_register"
-
-# 管理员密码 (WebUI管理面板)
+content_mode: "moderated"
 admin_password: "changeme123"
-
-# 角色存储目录
-roles_dir: "./roles"
-
-# 上传限制
-max_role_size_mb: 500
 max_audio_size_mb: 5
 max_image_size_mb: 10

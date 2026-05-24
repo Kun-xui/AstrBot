@@ -1,596 +1,1263 @@
+#!/usr/bin/env python3
 """
-角色分享服务器 — 社区共创平台
-
-功能:
-  - 角色ZIP上传/下载/发现
-  - 音频/图片增量更新（热更新）
-  - 设备指纹自动认证（免手动Token）
-  - 管理面板
-
-启动: python server.py
+角色分享服务器 — 单文件重构版
+端口: 8766 | 数据库: data.db | 配置: config.yaml
 """
-
-import os
-import json
-import hashlib
-import shutil
-import tempfile
-import time
-import uuid
+import os, sys, json, time, uuid, hashlib, mimetypes, zipfile, io
+import re
+import sqlite3
 from datetime import datetime
 from pathlib import Path
+from functools import wraps
+
+import pypinyin
 
 import yaml
-from flask import Flask, request, jsonify, send_file, render_template_string
+import bcrypt
+from flask import (Flask, request, jsonify, session,
+                   send_from_directory, render_template, abort, url_for)
 
-app = Flask(__name__)
+# ============================================================
+# 配置加载
+# ============================================================
+BASE_DIR = Path(__file__).parent.resolve()
+CONFIG_FILE = BASE_DIR / 'config.yaml'
+CONFIG_EXAMPLE = BASE_DIR / 'config.example.yaml'
 
-SCRIPT_DIR = Path(__file__).parent.absolute()
-CONFIG_PATH = SCRIPT_DIR / "config.yaml"
-DEVICES_PATH = SCRIPT_DIR / "devices.json"
-CHANGELOG_PATH = SCRIPT_DIR / "changelog.json"
-
-DEFAULT_CONFIG = {
-    "host": "0.0.0.0",
-    "port": 8765,
-    "auth_mode": "auto_register",
-    "admin_password": "changeme123",
-    "roles_dir": "./roles",
-    "max_role_size_mb": 500,
-    "max_audio_size_mb": 5,
-    "max_image_size_mb": 10,
-}
-
-config: dict = {}
-registered_devices: dict = {}
-changelog: list = []
-
-
-def load_config():
-    global config
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
+if not CONFIG_FILE.exists():
+    if CONFIG_EXAMPLE.exists():
+        print(f"[config] 复制 {CONFIG_EXAMPLE.name} -> {CONFIG_FILE.name}")
+        import shutil
+        shutil.copy2(str(CONFIG_EXAMPLE), str(CONFIG_FILE))
     else:
-        config = {}
-    for k, v in DEFAULT_CONFIG.items():
-        config.setdefault(k, v)
+        print(f"[config] 错误: 找不到 {CONFIG_FILE} 或 {CONFIG_EXAMPLE}")
+        sys.exit(1)
 
+with open(CONFIG_FILE) as f:
+    cfg = yaml.safe_load(f)
 
-def save_config():
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+HOST = cfg.get('host', '0.0.0.0')
+PORT = cfg.get('port', 8766)
+AUTH_MODE = cfg.get('auth_mode', 'auto_register')
+CONTENT_MODE = cfg.get('content_mode', 'moderated')
+ADMIN_PASSWORD = cfg.get('admin_password', 'changeme123')
+MAX_AUDIO_SIZE = cfg.get('max_audio_size_mb', 5) * 1024 * 1024
+MAX_IMAGE_SIZE = cfg.get('max_image_size_mb', 10) * 1024 * 1024
 
+# 文件路径
+AUDIO_DIR = BASE_DIR / 'audio'
+IMAGES_DIR = BASE_DIR / 'images'
+UPLOADS_DIR = BASE_DIR / 'uploads'
+PENDING_DIR = BASE_DIR / 'pending'
+DB_PATH = BASE_DIR / 'data.db'
+TEMPLATE_DIR = BASE_DIR / 'templates'
 
-def load_devices():
-    global registered_devices
-    if DEVICES_PATH.exists():
-        with open(DEVICES_PATH, "r", encoding="utf-8") as f:
-            registered_devices = json.load(f)
-    else:
-        registered_devices = {}
+for d in [AUDIO_DIR, IMAGES_DIR, UPLOADS_DIR, PENDING_DIR, TEMPLATE_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
 
+# 允许的文件类型
+ALLOWED_IMAGES = {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+ALLOWED_AUDIO = {'.mp3', '.wav', '.ogg', '.flac'}
+ALLOWED_ZIP = {'.zip', '.rar', '.7z'}
 
-def save_devices():
-    with open(DEVICES_PATH, "w", encoding="utf-8") as f:
-        json.dump(registered_devices, f, ensure_ascii=False, indent=2)
+app = Flask(__name__, template_folder=str(TEMPLATE_DIR))
+app.secret_key = hashlib.sha256(os.urandom(32)).hexdigest()
+app.config['SESSION_COOKIE_NAME'] = 'kunxun_admin'
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB
 
+# ============================================================
+# 数据库
+# ============================================================
+def get_db():
+    import sqlite3
+    conn = sqlite3.connect(str(DB_PATH), timeout=60)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
 
-def load_changelog():
-    global changelog
-    if CHANGELOG_PATH.exists():
-        with open(CHANGELOG_PATH, "r", encoding="utf-8") as f:
-            changelog = json.load(f)
-    else:
-        changelog = []
+def init_db():
+    conn = get_db()
+    conn.executescript('''
+        CREATE TABLE IF NOT EXISTS admins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at REAL
+        );
+        CREATE TABLE IF NOT EXISTS roles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            author TEXT DEFAULT '',
+            version TEXT DEFAULT '1.0.0',
+            desc TEXT DEFAULT '',
+            download_url TEXT DEFAULT '',
+            approved INTEGER DEFAULT 0,
+            rejected INTEGER DEFAULT 0,
+            created_at REAL,
+            updated_at REAL
+        );
+        CREATE TABLE IF NOT EXISTS audio_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role_name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            size INTEGER DEFAULT 0,
+            md5 TEXT DEFAULT '',
+            uploaded_by TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            created_at REAL,
+            UNIQUE(role_name, category, filename)
+        );
+        CREATE TABLE IF NOT EXISTS image_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role_name TEXT NOT NULL,
+            filename TEXT NOT NULL,
+            size INTEGER DEFAULT 0,
+            md5 TEXT DEFAULT '',
+            uploaded_by TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            created_at REAL,
+            UNIQUE(role_name, filename)
+        );
+        CREATE TABLE IF NOT EXISTS devices (
+            device_id TEXT PRIMARY KEY,
+            name TEXT DEFAULT '',
+            approved INTEGER DEFAULT 1,
+            registered_at REAL,
+            last_seen REAL
+        );
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT NOT NULL,
+            role_name TEXT DEFAULT '',
+            device_id TEXT DEFAULT '',
+            detail TEXT DEFAULT '',
+            created_at REAL
+        );
+    ''')
+    # 迁移：加slug列（如果不存在）
+    try:
+        conn.execute("ALTER TABLE roles ADD COLUMN slug TEXT DEFAULT ''")
+        for row in conn.execute("SELECT name FROM roles WHERE slug='' OR slug IS NULL"):
+            slug = name_to_slug(row['name'])
+            conn.execute("UPDATE roles SET slug=? WHERE name=?", (slug, row['name']))
+            print(f"  [migrate] {row['name']} → {slug}")
+    except sqlite3.OperationalError:
+        pass
+    # 迁移：文件状态列
+    for tbl in ('audio_files', 'image_files'):
+        try:
+            conn.execute(f"ALTER TABLE {tbl} ADD COLUMN status TEXT DEFAULT 'approved'")
+            print(f"  [migrate] 添加 status 列到 {tbl}")
+        except sqlite3.OperationalError:
+            pass
+    # 迁移：角色预览图 + tags
+    for col in ('preview_image_id', 'tags', 'display_desc', 'preview_filename'):
+        try:
+            conn.execute(f"ALTER TABLE roles ADD COLUMN {col} TEXT DEFAULT ''")
+            print(f"  [migrate] 添加 {col} 列到 roles")
+        except sqlite3.OperationalError:
+            pass
+    # 创建默认管理员
+    existing = conn.execute("SELECT id FROM admins WHERE username='admin'").fetchone()
+    if not existing:
+        pw_hash = bcrypt.hashpw(ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
+        conn.execute(
+            "INSERT INTO admins (username, password_hash, created_at) VALUES (?, ?, ?)",
+            ('admin', pw_hash, time.time())
+        )
+        print(f"[init] 已创建默认管理员: admin")
+    conn.commit()
+    conn.close()
+    print("[init] 数据库初始化完成")
 
+# ============================================================
+# 工具函数
+# ============================================================
+def now_ts():
+    return time.time()
 
-def save_changelog():
-    with open(CHANGELOG_PATH, "w", encoding="utf-8") as f:
-        json.dump(changelog, f, ensure_ascii=False, indent=2)
+def name_to_slug(name):
+    """中文名 → 拼音slug（纯小写字母数字下划线）"""
+    s = pypinyin.slug(name, separator='_', style=pypinyin.Style.NORMAL,
+                      errors=lambda x: re.sub(r'[^a-zA-Z0-9]', '_', x).lower())
+    # 确保纯字母数字下划线
+    s = re.sub(r'[^a-z0-9_]', '_', s)
+    # 去重下划线并去掉首尾
+    s = re.sub(r'_+', '_', s).strip('_')
+    return s or 'role_' + uuid.uuid4().hex[:8]
 
+def safe_filename(ext):
+    return f"{uuid.uuid4().hex}{ext}"
 
-def roles_dir() -> Path:
-    p = config.get("roles_dir", "./roles")
-    if not os.path.isabs(p):
-        p = os.path.join(SCRIPT_DIR, p)
-    return Path(p)
+def allowed_file(filename, allowed_set):
+    ext = os.path.splitext(filename)[1].lower()
+    if filename.lower().endswith('.tar.gz'):
+        ext = '.tar.gz'
+    return ext in allowed_set
 
+def file_md5(filepath):
+    h = hashlib.md5()
+    with open(filepath, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
 
-def role_dir(name: str) -> Path:
-    return roles_dir() / name
+def log_audit(action, role_name='', device_id='', detail=''):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO audit_log (action, role_name, device_id, detail, created_at) VALUES (?, ?, ?, ?, ?)",
+        (action, role_name, device_id, detail, now_ts())
+    )
+    conn.commit()
+    conn.close()
 
+def require_admin(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'admin_id' not in session:
+            return jsonify({'error': '未登录'}), 401
+        return f(*args, **kwargs)
+    return decorated
 
-def role_zip_path(name: str) -> Path:
-    return roles_dir() / f"{name}.zip"
+def require_device(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if AUTH_MODE == 'open':
+            return f(*args, **kwargs)
+        device_id = request.headers.get('X-Device-ID', '')
+        # 兼容模式：没有设备ID时自动分配
+        if not device_id:
+            if request.headers.get('User-Agent', '').startswith('curl/'):
+                device_id = f"curl_{request.remote_addr}"
+            elif request.headers.get('User-Agent', ''):
+                device_id = f"web_{hashlib.md5(request.headers.get('User-Agent','').encode()).hexdigest()[:12]}"
+            else:
+                device_id = f"anon_{hashlib.md5(request.remote_addr.encode()).hexdigest()[:12]}"
+        conn = get_db()
+        dev = conn.execute("SELECT * FROM devices WHERE device_id=?", (device_id,)).fetchone()
+        if not dev:
+            if AUTH_MODE == 'auto_register':
+                conn.execute(
+                    "INSERT INTO devices (device_id, approved, registered_at, last_seen) VALUES (?, 1, ?, ?)",
+                    (device_id, now_ts(), now_ts())
+                )
+                conn.commit()
+                conn.close()
+                log_audit('device_register', device_id=device_id)
+                return f(*args, **kwargs)
+            conn.close()
+            return jsonify({'error': '设备未注册'}), 401
+        if not dev['approved']:
+            conn.close()
+            return jsonify({'error': '设备已被禁用'}), 403
+        conn.execute("UPDATE devices SET last_seen=? WHERE device_id=?", (now_ts(), device_id))
+        conn.commit()
+        conn.close()
+        return f(*args, **kwargs)
+    return decorated
 
-
-def role_meta_path(name: str) -> Path:
-    return roles_dir() / f"{name}.json"
-
-
-def get_role_meta(name: str) -> dict:
-    mp = role_meta_path(name)
-    if mp.exists():
-        with open(mp, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def save_role_meta(name: str, meta: dict):
-    mp = role_meta_path(name)
-    meta["updated_at"] = time.time()
-    with open(mp, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-
-
-def scan_roles() -> list[dict]:
-    rd = roles_dir()
-    if not rd.exists():
-        return []
-    result = []
-    seen = set()
-    for f in sorted(rd.iterdir()):
-        if f.suffix.lower() == ".zip" and f.stem not in seen:
-            seen.add(f.stem)
-            meta = get_role_meta(f.stem)
-            result.append({
-                "name": f.stem,
-                "size": f.stat().st_size,
-                "version": meta.get("version", "1.0.0"),
-                "author": meta.get("author", "未知"),
-                "desc": meta.get("desc", ""),
-                "updated_at": meta.get("updated_at", 0),
-                "audio_count": meta.get("audio_count", 0),
-                "image_count": meta.get("image_count", 0),
-            })
-    return result
-
-
-def check_device_auth() -> tuple[bool, str]:
-    device_id = request.headers.get("X-Device-ID", "")
-    auth_mode = config.get("auth_mode", "auto_register")
-    if auth_mode == "open":
-        return True, device_id or "anonymous"
-    if not device_id:
-        return False, "缺少 X-Device-ID 请求头"
-    if device_id not in registered_devices:
-        if auth_mode == "auto_register":
-            registered_devices[device_id] = {
-                "registered_at": time.time(),
-                "name": f"设备_{device_id[:8]}",
-                "approved": True,
-            }
-            save_devices()
-            return True, device_id
-        elif auth_mode == "admin_approve":
-            dev = registered_devices.get(device_id, {})
-            if dev.get("approved"):
-                return True, device_id
-            return False, "设备未注册或未批准"
-    dev = registered_devices.get(device_id, {})
-    if not dev.get("approved", False) and auth_mode == "admin_approve":
-        return False, "设备未批准"
-    return True, device_id
-
-
-def add_changelog(action: str, role_name: str, by_device: str, detail: str = ""):
-    entry = {
-        "time": time.time(),
-        "action": action,
-        "role": role_name,
-        "device": by_device[:12] + "..." if len(by_device) > 12 else by_device,
-        "detail": detail,
+def build_role_dict(row):
+    d = dict(row)
+    return {
+        'id': d['id'],
+        'name': d['name'],
+        'slug': d.get('slug', ''),
+        'author': d['author'],
+        'version': d['version'],
+        'desc': d['desc'],
+        'display_desc': d.get('display_desc', '') or d['desc'],
+        'tags': d.get('tags', ''),
+        'preview_image_id': d.get('preview_image_id', 0),
+        'preview_filename': d.get('preview_filename', ''),
+        'download_url': d['download_url'],
+        'approved': d['approved'],
+        'rejected': d['rejected'],
+        'created_at': d['created_at'],
+        'updated_at': d['updated_at'],
     }
-    changelog.insert(0, entry)
-    if len(changelog) > 500:
-        changelog = changelog[:500]
-    save_changelog()
 
+def resolve_role(conn, name_or_slug):
+    """按名称或slug查找角色，返回角色row（含slug）"""
+    role = conn.execute(
+        "SELECT * FROM roles WHERE name=? OR slug=?", (name_or_slug, name_or_slug)
+    ).fetchone()
+    return role
+
+def resolve_name(conn, name_or_slug):
+    """按名称或slug查找，返回实际角色名"""
+    r = resolve_role(conn, name_or_slug)
+    return r['name'] if r else None
 
 # ============================================================
-#  角色 API
+# 公开 API
 # ============================================================
-
-@app.route("/api/roles", methods=["GET"])
-def api_roles():
-    ok, dev_id = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": dev_id}), 403
-    roles = scan_roles()
+@app.route('/api/ping')
+@require_device
+def api_ping():
+    conn = get_db()
+    role_count = conn.execute("SELECT COUNT(*) FROM roles WHERE approved=1").fetchone()[0]
+    device_count = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
+    pending_audio = conn.execute("SELECT COUNT(*) FROM audio_files WHERE status='pending'").fetchone()[0]
+    pending_images = conn.execute("SELECT COUNT(*) FROM image_files WHERE status='pending'").fetchone()[0]
+    conn.close()
     return jsonify({
-        "ok": True,
-        "roles": roles,
-        "count": len(roles),
-        "auth_mode": config.get("auth_mode", "auto_register"),
+        'status': 'ok',
+        'version': '2.0.0',
+        'roles': role_count,
+        'devices': device_count,
+        'pending_files': pending_audio + pending_images,
+        'time': now_ts(),
     })
 
-
-@app.route("/api/roles/<name>", methods=["GET"])
-def api_role_detail(name):
-    ok, dev_id = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": dev_id}), 403
-    meta = get_role_meta(name)
-    zp = role_zip_path(name)
-    audio_list = []
-    rd = role_dir(name)
-    audio_dir = rd / "audio" / "expressions"
-    if audio_dir.exists():
-        audio_list = sorted([f.name for f in audio_dir.iterdir() if f.suffix.lower() in (".mp3", ".wav")])
-    images_list = []
-    img_dir = rd / "images"
-    if img_dir.exists():
-        images_list = sorted([f.name for f in img_dir.iterdir()])
+@app.route('/api/server/info')
+def api_server_info():
+    """服务器信息（带宽等，公开）"""
     return jsonify({
-        "ok": True,
-        "name": name,
-        "meta": meta,
-        "zip_exists": zp.exists(),
-        "zip_size": zp.stat().st_size if zp.exists() else 0,
-        "audio_files": audio_list,
-        "image_files": images_list,
+        'bandwidth_mbps': 10,
+        'bandwidth_mbs': 1.2,
+        'max_upload_single_file_mb': 50,
+        'max_upload_total_mb': 200,
+        'message': '当前服务器带宽约 1.2MB/s，上传大文件建议后台/夜间操作',
     })
 
-
-@app.route("/api/roles/<name>/download", methods=["GET"])
-def api_role_download(name):
-    ok, dev_id = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": dev_id}), 403
-    zp = role_zip_path(name)
-    if not zp.exists():
-        return jsonify({"ok": False, "msg": f"角色 [{name}] 不存在"}), 404
-    add_changelog("download", name, dev_id)
-    return send_file(str(zp), as_attachment=True, download_name=f"{name}.zip")
-
-
-@app.route("/api/roles/share", methods=["POST"])
-def api_role_share():
-    ok, dev_id = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": dev_id}), 403
-    if "file" not in request.files:
-        return jsonify({"ok": False, "msg": "未找到文件"}), 400
-    file = request.files["file"]
-    name = request.form.get("name", "")
-    author = request.form.get("author", "")
-    version = request.form.get("version", "1.0.0")
-    desc = request.form.get("desc", "")
-    max_size = config.get("max_role_size_mb", 500) * 1024 * 1024
-    tmp = os.path.join(tempfile.gettempdir(), f"role_upload_{uuid.uuid4().hex[:8]}.zip")
-    file.save(tmp)
-    fsize = os.path.getsize(tmp)
-    if fsize > max_size:
-        os.remove(tmp)
-        return jsonify({"ok": False, "msg": f"文件过大 ({fsize/1024/1024:.1f}MB > {max_size/1024/1024:.0f}MB)"}), 413
-    if not name:
-        stem = os.path.splitext(file.filename)[0] if file.filename else "unknown"
-        name = stem
-    dest = role_zip_path(name)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(tmp, str(dest))
-    meta = {
-        "version": version,
-        "author": author,
-        "desc": desc,
-        "size": fsize,
-    }
-    save_role_meta(name, meta)
-    add_changelog("share", name, dev_id, f"v{version} by {author}")
-    return jsonify({"ok": True, "msg": f"角色 [{name}] 分享成功", "name": name})
-
-
-# ============================================================
-#  音频热更新 API
-# ============================================================
-
-@app.route("/api/roles/<name>/audio", methods=["GET"])
-def api_role_audio_list(name):
-    ok, _ = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": "未授权"}), 403
-    rd = role_dir(name)
-    if not rd.exists():
-        return jsonify({"ok": False, "msg": f"角色 [{name}] 不存在"}), 404
-    expressions = []
-    audio_dir = rd / "audio" / "expressions"
-    if audio_dir.exists():
-        for f in sorted(audio_dir.iterdir()):
-            if f.suffix.lower() in (".mp3", ".wav"):
-                expressions.append({
-                    "name": f.name,
-                    "size": f.stat().st_size,
-                    "modified": f.stat().st_mtime,
-                })
-    music = []
-    music_dir = rd / "audio" / "music"
-    if music_dir.exists():
-        for f in sorted(music_dir.iterdir()):
-            if f.suffix.lower() in (".mp3", ".wav"):
-                music.append({"name": f.name, "size": f.stat().st_size})
-    audio_map = {}
-    map_path = rd / "audio" / "audio_map.json"
-    if map_path.exists():
-        with open(map_path, "r", encoding="utf-8") as f:
-            audio_map = json.load(f)
-    return jsonify({
-        "ok": True,
-        "name": name,
-        "expressions": expressions,
-        "music": music,
-        "audio_map": audio_map,
-    })
-
-
-@app.route("/api/roles/<name>/audio/<category>/<filename>", methods=["GET"])
-def api_role_audio_download(name, category, filename):
-    ok, _ = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": "未授权"}), 403
-    fp = role_dir(name) / "audio" / category / filename
-    if not fp.exists():
-        return jsonify({"ok": False, "msg": "文件不存在"}), 404
-    return send_file(str(fp))
-
-
-@app.route("/api/roles/<name>/audio", methods=["POST"])
-def api_role_audio_upload(name):
-    ok, dev_id = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": dev_id}), 403
-    if "file" not in request.files:
-        return jsonify({"ok": False, "msg": "未找到文件"}), 400
-    file = request.files["file"]
-    category = request.form.get("category", "expressions")
-    max_size = config.get("max_audio_size_mb", 5) * 1024 * 1024
-    fdata = file.read()
-    if len(fdata) > max_size:
-        return jsonify({"ok": False, "msg": f"音频过大"}), 413
-    dest_dir = role_dir(name) / "audio" / category
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / file.filename
-    dest.write_bytes(fdata)
-    meta = get_role_meta(name)
-    meta["audio_count"] = meta.get("audio_count", 0) + 1
-    save_role_meta(name, meta)
-    add_changelog("audio_upload", name, dev_id, f"{category}/{file.filename}")
-    return jsonify({"ok": True, "msg": f"音频 [{file.filename}] 已上传"})
-
-
-# ============================================================
-#  图片热更新 API
-# ============================================================
-
-@app.route("/api/roles/<name>/images", methods=["GET"])
-def api_role_images_list(name):
-    ok, _ = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": "未授权"}), 403
-    rd = role_dir(name)
-    if not rd.exists():
-        return jsonify({"ok": False, "msg": f"角色 [{name}] 不存在"}), 404
-    img_dir = rd / "images"
-    images = []
-    if img_dir.exists():
-        for f in sorted(img_dir.iterdir()):
-            images.append({
-                "name": f.name,
-                "size": f.stat().st_size,
-                "modified": f.stat().st_mtime,
-            })
-    return jsonify({
-        "ok": True,
-        "name": name,
-        "images": images,
-    })
-
-
-@app.route("/api/roles/<name>/images/<filename>", methods=["GET"])
-def api_role_image_download(name, filename):
-    fp = role_dir(name) / "images" / filename
-    if not fp.exists():
-        return jsonify({"ok": False, "msg": "文件不存在"}), 404
-    return send_file(str(fp))
-
-
-@app.route("/api/roles/<name>/images", methods=["POST"])
-def api_role_image_upload(name):
-    ok, dev_id = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": dev_id}), 403
-    if "file" not in request.files:
-        return jsonify({"ok": False, "msg": "未找到文件"}), 400
-    file = request.files["file"]
-    max_size = config.get("max_image_size_mb", 10) * 1024 * 1024
-    fdata = file.read()
-    if len(fdata) > max_size:
-        return jsonify({"ok": False, "msg": f"图片过大"}), 413
-    dest_dir = role_dir(name) / "images"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / file.filename
-    dest.write_bytes(fdata)
-    meta = get_role_meta(name)
-    meta["image_count"] = meta.get("image_count", 0) + 1
-    save_role_meta(name, meta)
-    add_changelog("image_upload", name, dev_id, file.filename)
-    return jsonify({"ok": True, "msg": f"图片 [{file.filename}] 已上传"})
-
-
-# ============================================================
-#  增量更新 API (客户端检查哪些文件需要更新)
-# ============================================================
-
-@app.route("/api/roles/<name>/updates", methods=["GET"])
-def api_role_updates(name):
-    ok, _ = check_device_auth()
-    if not ok:
-        return jsonify({"ok": False, "msg": "未授权"}), 403
-    rd = role_dir(name)
-    if not rd.exists():
-        return jsonify({"ok": False, "msg": f"角色 [{name}] 不存在"}), 404
-    all_files = {}
-    for root, dirs, files in os.walk(str(rd)):
-        for f in files:
-            if f.endswith(".json") and ("user_facts" in f or "raw_history" in f or "msg_count" in f):
-                continue
-            full = Path(root) / f
-            rel = str(full.relative_to(rd)).replace("\\", "/")
-            all_files[rel] = {
-                "size": full.stat().st_size,
-                "mtime": full.stat().st_mtime,
-            }
-    return jsonify({
-        "ok": True,
-        "name": name,
-        "version": get_role_meta(name).get("version", "1.0.0"),
-        "file_count": len(all_files),
-        "files": all_files,
-    })
-
-
-# ============================================================
-#  设备管理 API
-# ============================================================
-
-@app.route("/api/device/register", methods=["POST"])
-def api_device_register():
+@app.route('/api/roles/create', methods=['POST'])
+def api_create_role():
+    """公开创建角色（轻量）"""
     data = request.get_json() or {}
-    device_id = data.get("device_id", "")
-    device_name = data.get("name", "")
-    if not device_id:
-        return jsonify({"ok": False, "msg": "缺少 device_id"}), 400
-    if device_id in registered_devices:
-        registered_devices[device_id]["name"] = device_name or registered_devices[device_id].get("name", "")
-        registered_devices[device_id]["last_seen"] = time.time()
-        save_devices()
-        return jsonify({"ok": True, "msg": "设备已更新", "approved": registered_devices[device_id].get("approved", True)})
-    auth_mode = config.get("auth_mode", "auto_register")
-    approved = auth_mode != "admin_approve"
-    registered_devices[device_id] = {
-        "registered_at": time.time(),
-        "name": device_name or f"设备_{device_id[:8]}",
-        "approved": approved,
-        "last_seen": time.time(),
-    }
-    save_devices()
-    return jsonify({"ok": True, "msg": "设备已注册", "approved": approved})
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'error': '角色名不能为空'}), 400
+    if len(name) > 64:
+        return jsonify({'error': '角色名过长，最多64个字符'}), 400
 
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM roles WHERE name=?", (name,)).fetchone()
+    if existing:
+        conn.close()
+        return jsonify({'error': '角色名已存在'}), 409
 
-@app.route("/api/devices", methods=["GET"])
-def api_devices():
-    password = request.args.get("password", "")
-    if password != config.get("admin_password", ""):
-        return jsonify({"ok": False, "msg": "密码错误"}), 403
+    slug = name_to_slug(name)
+    desc = data.get('desc', '').strip()[:256]
+    author = data.get('author', '').strip()[:64]
+    version = '1.0.0'
+
+    conn.execute(
+        "INSERT INTO roles (name, slug, author, version, desc, created_at, updated_at, approved) VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+        (name, slug, author, version, desc, now_ts(), now_ts())
+    )
+    conn.commit()
+    conn.close()
+
+    device_id = request.headers.get('X-Device-ID', '') or 'web_public'
+    log_audit('role_create_public', role_name=name, device_id=device_id, detail=f'用户创建角色')
+
     return jsonify({
-        "ok": True,
-        "devices": registered_devices,
-        "count": len(registered_devices),
+        'name': name,
+        'slug': slug,
+        'approved': False,
+        'message': '角色创建成功！请等待管理员审核通过后即可上传文件。',
+    }), 201
+
+@app.route('/api/roles', methods=['GET'])
+@require_device
+def api_list_roles():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM roles WHERE approved=1 ORDER BY updated_at DESC"
+    ).fetchall()
+    conn.close()
+    return jsonify([build_role_dict(r) for r in rows])
+
+@app.route('/api/roles/<name>', methods=['GET'])
+@require_device
+def api_get_role(name):
+    conn = get_db()
+    role = resolve_role(conn, name)
+    if not role:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    real_name = role['name']
+    audio = conn.execute(
+        "SELECT id, category, filename, size FROM audio_files WHERE role_name=? ORDER BY category, filename",
+        (real_name,)
+    ).fetchall()
+    images = conn.execute(
+        "SELECT id, filename, size FROM image_files WHERE role_name=? ORDER BY filename",
+        (real_name,)
+    ).fetchall()
+    conn.close()
+    result = build_role_dict(role)
+    result['audio'] = [dict(a) for a in audio]
+    result['images'] = [dict(i) for i in images]
+    return jsonify(result)
+
+@app.route('/api/roles/<name>/status', methods=['GET'])
+@require_device
+def api_role_status(name):
+    """角色状态摘要（轻量，含计数）"""
+    conn = get_db()
+    role = resolve_role(conn, name)
+    if not role:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    real_name = role['name']
+    audio_count = conn.execute(
+        "SELECT COUNT(*) FROM audio_files WHERE role_name=?", (real_name,)
+    ).fetchone()[0]
+    image_count = conn.execute(
+        "SELECT COUNT(*) FROM image_files WHERE role_name=?", (real_name,)
+    ).fetchone()[0]
+    conn.close()
+    result = build_role_dict(role)
+    result['audio_count'] = audio_count
+    result['image_count'] = image_count
+    return jsonify(result)
+
+@app.route('/api/roles/<name>/audio', methods=['GET'])
+@require_device
+def api_list_audio(name):
+    conn = get_db()
+    real_name = resolve_name(conn, name)
+    if not real_name:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    files = conn.execute(
+        "SELECT id, category, filename, size, md5 FROM audio_files WHERE role_name=? ORDER BY category, filename",
+        (real_name,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(f) for f in files])
+
+@app.route('/api/roles/<name>/audio/<cat>/<file>', methods=['GET'])
+@require_device
+def api_get_audio(name, cat, file):
+    safe_name = os.path.basename(file)
+    conn = get_db()
+    real_name = resolve_name(conn, name)
+    if not real_name:
+        conn.close()
+        abort(404)
+    # 检查文件是否已审核
+    f = conn.execute(
+        "SELECT status FROM audio_files WHERE role_name=? AND category=? AND filename=?",
+        (real_name, cat, safe_name)
+    ).fetchone()
+    conn.close()
+    if not f or f['status'] != 'approved':
+        abort(404)
+    audio_path = AUDIO_DIR / real_name / cat
+    if not audio_path.exists():
+        abort(404)
+    return send_from_directory(str(audio_path), safe_name)
+
+@app.route('/api/roles/<name>/audio', methods=['POST'])
+@require_device
+def api_upload_audio(name):
+    """公开上传音频（进审核队列）"""
+    if 'file' not in request.files:
+        return jsonify({'error': '请选择文件'}), 400
+    file = request.files['file']
+    # 先验证角色存在
+    conn = get_db()
+    real_name = resolve_name(conn, name)
+    conn.close()
+    if not real_name:
+        return jsonify({'error': '角色不存在'}), 404
+    category = request.form.get('category', '') or 'expressions'
+    if category not in ('expressions', 'music'):
+        return jsonify({'error': '分类必须是 expressions 或 music'}), 400
+    if not file.filename or not allowed_file(file.filename, ALLOWED_AUDIO):
+        return jsonify({'error': '不支持的音频格式'}), 400
+    if request.content_length and request.content_length > MAX_AUDIO_SIZE:
+        return jsonify({'error': f'音频太大，最大{MAX_AUDIO_SIZE//1024//1024}MB'}), 413
+
+    device_id = request.headers.get('X-Device-ID', '')
+    ext = os.path.splitext(file.filename)[1].lower()
+    fname = safe_filename(ext)
+    
+    save_dir = PENDING_DIR / real_name / 'audio' / category
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / fname
+    file.save(str(save_path))
+    
+    size = save_path.stat().st_size
+    md5 = file_md5(save_path)
+    
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO audio_files (role_name, category, filename, size, md5, uploaded_by, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+            (real_name, category, fname, size, md5, device_id, now_ts())
+        )
+        conn.commit()
+        log_audit('audio_upload', role_name=real_name, device_id=device_id, detail=f'{category}/{fname}')
+        conn.close()
+    except Exception:
+        conn.close()
+        save_path.unlink(missing_ok=True)
+        return jsonify({'error': '文件名冲突'}), 409
+    
+    return jsonify({'filename': fname, 'size': size, 'md5': md5, 'pending': True}), 201
+
+@app.route('/api/roles/<name>/images', methods=['GET'])
+@require_device
+def api_list_images(name):
+    conn = get_db()
+    real_name = resolve_name(conn, name)
+    if not real_name:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    files = conn.execute(
+        "SELECT id, filename, size, md5 FROM image_files WHERE role_name=? ORDER BY filename",
+        (real_name,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(f) for f in files])
+
+@app.route('/api/roles/<name>/images/<file>', methods=['GET'])
+@require_device
+def api_get_image(name, file):
+    safe_name = os.path.basename(file)
+    conn = get_db()
+    real_name = resolve_name(conn, name)
+    if not real_name:
+        conn.close()
+        abort(404)
+    
+    # 预览图例外：preview_ 开头的文件跳过数据库检查（已审核通过直接显示）
+    if safe_name.startswith('preview_'):
+        conn.close()
+        img_path = IMAGES_DIR / real_name
+        if not img_path.exists() or not (img_path / safe_name).exists():
+            abort(404)
+        return send_from_directory(str(img_path), safe_name)
+    
+    # 检查文件是否已审核
+    f = conn.execute(
+        "SELECT status FROM image_files WHERE role_name=? AND filename=?",
+        (real_name, safe_name)
+    ).fetchone()
+    conn.close()
+    if not f or f['status'] != 'approved':
+        abort(404)
+    img_path = IMAGES_DIR / real_name
+    if not img_path.exists():
+        abort(404)
+    return send_from_directory(str(img_path), safe_name)
+
+@app.route('/api/roles/<name>/images', methods=['POST'])
+@require_device
+def api_upload_image(name):
+    """公开上传图片（进审核队列）"""
+    if 'file' not in request.files:
+        return jsonify({'error': '请选择文件'}), 400
+    file = request.files['file']
+    # 先验证角色存在
+    conn = get_db()
+    real_name = resolve_name(conn, name)
+    conn.close()
+    if not real_name:
+        return jsonify({'error': '角色不存在'}), 404
+    if not file.filename or not allowed_file(file.filename, ALLOWED_IMAGES):
+        return jsonify({'error': '不支持的图片格式'}), 400
+    if request.content_length and request.content_length > MAX_IMAGE_SIZE:
+        return jsonify({'error': f'图片太大，最大{MAX_IMAGE_SIZE//1024//1024}MB'}), 413
+
+    device_id = request.headers.get('X-Device-ID', '')
+    ext = os.path.splitext(file.filename)[1].lower()
+    fname = safe_filename(ext)
+    
+    save_dir = PENDING_DIR / real_name / 'images'
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / fname
+    file.save(str(save_path))
+    
+    size = save_path.stat().st_size
+    md5 = file_md5(save_path)
+    
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO image_files (role_name, filename, size, md5, uploaded_by, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (real_name, fname, size, md5, device_id, now_ts())
+        )
+        conn.commit()
+        log_audit('image_upload', role_name=real_name, device_id=device_id, detail=fname)
+        conn.close()
+    except Exception:
+        conn.close()
+        save_path.unlink(missing_ok=True)
+        return jsonify({'error': '文件名冲突'}), 409
+    
+    return jsonify({'filename': fname, 'size': size, 'md5': md5, 'pending': True}), 201
+
+@app.route('/api/roles/<name>/push', methods=['POST'])
+@require_device
+def api_push_zip(name):
+    """批量推送ZIP（音频+图片），进审核队列"""
+    if 'file' not in request.files:
+        return jsonify({'error': '请选择ZIP文件'}), 400
+    file = request.files['file']
+    # 先验证角色存在
+    conn = get_db()
+    real_name = resolve_name(conn, name)
+    conn.close()
+    if not real_name:
+        return jsonify({'error': '角色不存在'}), 404
+    if not file.filename or not allowed_file(file.filename, ALLOWED_ZIP):
+        return jsonify({'error': '请上传ZIP/RAR/7z文件'}), 400
+
+    device_id = request.headers.get('X-Device-ID', '')
+    
+    # 保存ZIP到pending
+    ext = os.path.splitext(file.filename)[1].lower()
+    fname = f"push_{uuid.uuid4().hex}{ext}"
+    save_path = PENDING_DIR / fname
+    file.save(str(save_path))
+    
+    # 解析ZIP内容
+    extracted = {'audio': [], 'images': []}
+    try:
+        with zipfile.ZipFile(save_path, 'r') as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                base = os.path.basename(info.filename)
+                if not base:
+                    continue
+                ext2 = os.path.splitext(base)[1].lower()
+                if ext2 in ALLOWED_AUDIO:
+                    extracted['audio'].append({
+                        'filename': base,
+                        'size': info.file_size,
+                        'category': 'expressions' if 'music' not in info.filename.lower() else 'music',
+                    })
+                elif ext2 in ALLOWED_IMAGES:
+                    extracted['images'].append({
+                        'filename': base,
+                        'size': info.file_size,
+                    })
+    except Exception as e:
+        save_path.unlink(missing_ok=True)
+        return jsonify({'error': f'ZIP解析失败: {str(e)}'}), 400
+    
+    log_audit('zip_push', role_name=real_name, device_id=device_id, detail=json.dumps(extracted))
+    
+    return jsonify({
+        'filename': fname,
+        'size': save_path.stat().st_size,
+        'extracted': extracted,
+        'pending': True,
+    }), 201
+
+@app.route('/api/roles/share', methods=['POST'])
+@require_device
+def api_share_role():
+    """上传角色ZIP（完整角色包）"""
+    if 'file' not in request.files:
+        return jsonify({'error': '请选择ZIP文件'}), 400
+    file = request.files['file']
+    role_name = request.form.get('name', '')
+    if not role_name:
+        return jsonify({'error': '请提供角色名'}), 400
+    if not file.filename or not allowed_file(file.filename, ALLOWED_ZIP):
+        return jsonify({'error': '请上传ZIP文件'}), 400
+
+    device_id = request.headers.get('X-Device-ID', '')
+    ext = os.path.splitext(file.filename)[1].lower()
+    fname = f"share_{role_name}_{uuid.uuid4().hex[:8]}{ext}"
+    save_path = PENDING_DIR / fname
+    file.save(str(save_path))
+    
+    log_audit('role_share', role_name=role_name, device_id=device_id, detail=fname)
+    
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM roles WHERE name=?", (role_name,)).fetchone()
+    if not existing:
+        slug = name_to_slug(role_name)
+        conn.execute(
+            "INSERT INTO roles (name, slug, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (role_name, slug, now_ts(), now_ts())
+        )
+        conn.commit()
+    conn.close()
+    
+    return jsonify({
+        'filename': fname,
+        'size': save_path.stat().st_size,
+        'pending': True,
+    }), 201
+
+# ============================================================
+# 设备API
+# ============================================================
+@app.route('/api/device/register', methods=['POST'])
+def api_register_device():
+    data = request.get_json() or {}
+    device_id = data.get('device_id', '') or request.headers.get('X-Device-ID', '')
+    if not device_id:
+        return jsonify({'error': '缺少 device_id'}), 400
+    name = data.get('name', '')
+    
+    conn = get_db()
+    existing = conn.execute("SELECT * FROM devices WHERE device_id=?", (device_id,)).fetchone()
+    if existing:
+        conn.execute("UPDATE devices SET name=?, last_seen=? WHERE device_id=?",
+                     (name or existing['name'], now_ts(), device_id))
+        conn.commit()
+        conn.close()
+        return jsonify({'device_id': device_id, 'registered': True, 'approved': bool(existing['approved'])})
+    
+    conn.execute(
+        "INSERT INTO devices (device_id, name, approved, registered_at, last_seen) VALUES (?, ?, 1, ?, ?)",
+        (device_id, name, now_ts(), now_ts())
+    )
+    conn.commit()
+    conn.close()
+    log_audit('device_register', device_id=device_id, detail=name)
+    return jsonify({'device_id': device_id, 'registered': True, 'approved': True}), 201
+
+@app.route('/api/plugins.json')
+def api_plugins_json():
+    """动态生成插件目录 JSON（供主站使用）"""
+    conn = get_db()
+    roles = conn.execute("SELECT * FROM roles WHERE approved=1 ORDER BY updated_at DESC").fetchall()
+    conn.close()
+    result = []
+    for r in roles:
+        d = dict(r)
+        slug = d.get('slug', '') or name_to_slug(d['name'])
+        preview = ''
+        
+        # 1. 优先用管理员单独上传的预览图
+        preview_fn = d.get('preview_filename', '')
+        if preview_fn:
+            preview = f"/api/roles/{slug}/images/{preview_fn}"
+        
+        # 2. 用 preview_image_id 指定某张已审核图片
+        if not preview:
+            preview_img_id = d.get('preview_image_id', 0)
+            if preview_img_id:
+                img = conn.execute("SELECT filename FROM image_files WHERE id=? AND role_name=? AND status='approved'",
+                                   (preview_img_id, d['name'])).fetchone()
+                if img:
+                    preview = f"/api/roles/{slug}/images/{img['filename']}"
+        
+        # 3. 自动取第一张已审核图片
+        if not preview:
+            conn2 = get_db()
+            img = conn2.execute("SELECT filename FROM image_files WHERE role_name=? AND status='approved' LIMIT 1",
+                                (d['name'],)).fetchone()
+            conn2.close()
+            if img:
+                preview = f"/api/roles/{slug}/images/{img['filename']}"
+        
+        tags = d.get('tags', '') or 'AstrBot'
+        tag_list = [t.strip() for t in tags.split(',') if t.strip()]
+        
+        result.append({
+            'id': slug or d['name'],
+            'name': d['name'],
+            'desc': d.get('display_desc', '') or d['desc'],
+            'author': d.get('author', ''),
+            'preview': preview,
+            'tags': tag_list,
+            'version': d['version'],
+            'updated': datetime.fromtimestamp(d['updated_at']).strftime('%Y-%m-%d') if d.get('updated_at') else '',
+        })
+    return jsonify(result)
+
+# ============================================================
+# 管理 API
+# ============================================================
+@app.route('/api/admin/login', methods=['POST'])
+def admin_login():
+    data = request.get_json() or {}
+    username = data.get('username', '')
+    password = data.get('password', '')
+    
+    conn = get_db()
+    admin = conn.execute("SELECT * FROM admins WHERE username=?", (username,)).fetchone()
+    conn.close()
+    
+    if not admin or not bcrypt.checkpw(password.encode(), admin['password_hash'].encode()):
+        return jsonify({'error': '用户名或密码错误'}), 401
+    
+    session['admin_id'] = admin['id']
+    session['admin_username'] = admin['username']
+    session.permanent = True
+    app.permanent_session_lifetime = 86400  # 24h
+    
+    log_audit('admin_login', detail=username)
+    return jsonify({'username': username, 'message': '登录成功'})
+
+@app.route('/api/admin/logout', methods=['POST'])
+@require_admin
+def admin_logout():
+    log_audit('admin_logout', detail=session.get('admin_username', ''))
+    session.clear()
+    return jsonify({'message': '已退出'})
+
+@app.route('/api/admin/me', methods=['GET'])
+@require_admin
+def admin_me():
+    return jsonify({
+        'id': session.get('admin_id'),
+        'username': session.get('admin_username'),
     })
 
+@app.route('/api/admin/roles', methods=['GET'])
+@require_admin
+def admin_list_roles():
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM roles ORDER BY updated_at DESC").fetchall()
+    conn.close()
+    return jsonify([build_role_dict(r) for r in rows])
 
-@app.route("/api/devices/<device_id>/approve", methods=["POST"])
-def api_device_approve(device_id):
-    password = (request.get_json() or {}).get("password", "")
-    if password != config.get("admin_password", ""):
-        return jsonify({"ok": False, "msg": "密码错误"}), 403
-    if device_id not in registered_devices:
-        return jsonify({"ok": False, "msg": "设备不存在"}), 404
-    registered_devices[device_id]["approved"] = True
-    save_devices()
-    return jsonify({"ok": True, "msg": "设备已批准"})
+@app.route('/api/admin/roles', methods=['POST'])
+@require_admin
+def admin_create_role():
+    data = request.get_json() or {}
+    name = data.get('name', '').strip()
+    if not name:
+        return jsonify({'error': '角色名不能为空'}), 400
+    
+    conn = get_db()
+    existing = conn.execute("SELECT id FROM roles WHERE name=?", (name,)).fetchone()
+    if existing:
+        conn.close()
+        return jsonify({'error': '角色名已存在'}), 409
+    
+    slug = name_to_slug(name)
+    conn.execute(
+        "INSERT INTO roles (name, slug, author, version, desc, download_url, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (name, slug, data.get('author', ''), data.get('version', '1.0.0'),
+         data.get('desc', ''), data.get('download_url', ''), now_ts(), now_ts())
+    )
+    conn.commit()
+    conn.close()
+    log_audit('role_create', role_name=name)
+    return jsonify({'name': name, 'slug': slug, 'message': '已创建'}), 201
 
+@app.route('/api/admin/roles/<name>', methods=['PUT'])
+@require_admin
+def admin_update_role(name):
+    data = request.get_json() or {}
+    conn = get_db()
+    role = resolve_role(conn, name)
+    if not role:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    
+    real_name = role['name']
+    fields = {}
+    for key in ('author', 'version', 'desc', 'download_url', 'tags', 'display_desc', 'preview_image_id', 'preview_filename'):
+        if key in data:
+            fields[key] = data[key]
+    if data.get('name') and data['name'] != real_name:
+        fields['name'] = data['name']
+        fields['slug'] = name_to_slug(data['name'])
+    
+    if fields:
+        fields['updated_at'] = now_ts()
+        set_clause = ', '.join(f"{k}=?" for k in fields)
+        vals = list(fields.values())
+        vals.append(real_name)
+        conn.execute(f"UPDATE roles SET {set_clause} WHERE name=?", vals)
+        conn.commit()
+        log_audit('role_update', role_name=real_name, detail=json.dumps(fields))
+    
+    role = conn.execute("SELECT * FROM roles WHERE name=?", (fields.get('name', real_name),)).fetchone()
+    conn.close()
+    return jsonify(build_role_dict(role))
 
-@app.route("/api/changelog", methods=["GET"])
-def api_changelog():
-    limit = int(request.args.get("limit", "50"))
-    return jsonify({"ok": True, "entries": changelog[:limit]})
+@app.route('/api/admin/roles/<name>/preview', methods=['POST'])
+@require_admin
+def admin_upload_preview(name):
+    """上传角色预览图"""
+    if 'file' not in request.files:
+        return jsonify({'error': '请选择图片文件'}), 400
+    file = request.files['file']
+    
+    conn = get_db()
+    role = resolve_role(conn, name)
+    if not role:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    real_name = role['name']
+    conn.close()
+    
+    if not file.filename or not allowed_file(file.filename, ALLOWED_IMAGES):
+        return jsonify({'error': '不支持的图片格式（支持 jpg/png/gif/webp）'}), 400
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    fname = f"preview_{uuid.uuid4().hex}{ext}"
+    
+    # 保存到图片目录
+    save_dir = IMAGES_DIR / real_name
+    save_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 删除旧预览图
+    cursor = get_db()
+    old = cursor.execute("SELECT preview_filename FROM roles WHERE name=?", (real_name,)).fetchone()
+    if old and old['preview_filename']:
+        old_path = save_dir / old['preview_filename']
+        old_path.unlink(missing_ok=True)
+    cursor.close()
+    
+    save_path = save_dir / fname
+    file.save(str(save_path))
+    
+    # 更新数据库
+    conn2 = get_db()
+    conn2.execute("UPDATE roles SET preview_filename=?, updated_at=? WHERE name=?",
+                  (fname, now_ts(), real_name))
+    conn2.commit()
+    conn2.close()
+    
+    log_audit('preview_upload', role_name=real_name, detail=fname)
+    return jsonify({'filename': fname, 'url': f'/api/roles/{role["slug"] or real_name}/images/{fname}', 'message': '预览图已上传'})
 
+@app.route('/api/admin/roles/<name>/preview', methods=['DELETE'])
+@require_admin
+def admin_remove_preview(name):
+    """删除角色预览图"""
+    conn = get_db()
+    role = resolve_role(conn, name)
+    if not role:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    real_name = role['name']
+    preview = role['preview_filename']
+    
+    if preview:
+        (IMAGES_DIR / real_name / preview).unlink(missing_ok=True)
+        conn.execute("UPDATE roles SET preview_filename='', updated_at=? WHERE name=?",
+                     (now_ts(), real_name))
+        conn.commit()
+        log_audit('preview_remove', role_name=real_name)
+    
+    conn.close()
+    return jsonify({'message': '预览图已清除'})
+
+@app.route('/api/admin/roles/<name>', methods=['DELETE'])
+@require_admin
+def admin_delete_role(name):
+    conn = get_db()
+    role = resolve_role(conn, name)
+    if not role:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    real_name = role['name']
+    # 删除文件
+    for f in conn.execute("SELECT filename FROM audio_files WHERE role_name=?", (real_name,)).fetchall():
+        for cat in ('expressions', 'music'):
+            p = AUDIO_DIR / real_name / cat / f['filename']
+            p.unlink(missing_ok=True)
+    for f in conn.execute("SELECT filename FROM image_files WHERE role_name=?", (real_name,)).fetchall():
+        p = IMAGES_DIR / real_name / f['filename']
+        p.unlink(missing_ok=True)
+    # 清理pending
+    import shutil
+    for d in [PENDING_DIR / real_name, AUDIO_DIR / real_name, IMAGES_DIR / real_name]:
+        if d.exists():
+            shutil.rmtree(str(d), ignore_errors=True)
+    
+    conn.execute("DELETE FROM audio_files WHERE role_name=?", (real_name,))
+    conn.execute("DELETE FROM image_files WHERE role_name=?", (real_name,))
+    conn.execute("DELETE FROM roles WHERE name=?", (real_name,))
+    conn.commit()
+    conn.close()
+    log_audit('role_delete', role_name=real_name)
+    return jsonify({'message': '已删除'})
+
+@app.route('/api/admin/pending', methods=['GET'])
+@require_admin
+def admin_pending():
+    """待审核文件：status=pending 的音频和图片"""
+    conn = get_db()
+    audio = conn.execute(
+        "SELECT af.*, r.slug FROM audio_files af JOIN roles r ON r.name=af.role_name WHERE af.status='pending' ORDER BY af.created_at DESC"
+    ).fetchall()
+    images = conn.execute(
+        "SELECT imf.*, r.slug FROM image_files imf JOIN roles r ON r.name=imf.role_name WHERE imf.status='pending' ORDER BY imf.created_at DESC"
+    ).fetchall()
+    conn.close()
+    return jsonify({
+        'audio': [dict(a) for a in audio],
+        'images': [dict(i) for i in images],
+    })
+
+@app.route('/api/admin/approve', methods=['POST'])
+@require_admin
+def admin_approve():
+    """批准角色"""
+    data = request.get_json() or {}
+    name = data.get('name', '')
+    if not name:
+        return jsonify({'error': '请指定角色名'}), 400
+    
+    conn = get_db()
+    role = conn.execute("SELECT * FROM roles WHERE name=?", (name,)).fetchone()
+    if not role:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    
+    conn.execute("UPDATE roles SET approved=1, rejected=0, updated_at=? WHERE name=?", (now_ts(), name))
+    
+    # 移动pending文件到正式目录
+    import shutil
+    pending_role = PENDING_DIR / name
+    if pending_role.exists():
+        # 移动音频
+        for cat in ('expressions', 'music'):
+            src = pending_role / 'audio' / cat
+            if src.exists():
+                dst = AUDIO_DIR / name / cat
+                dst.mkdir(parents=True, exist_ok=True)
+                for f in src.iterdir():
+                    if f.is_file():
+                        shutil.move(str(f), str(dst / f.name))
+        # 移动图片
+        src = pending_role / 'images'
+        if src.exists():
+            dst = IMAGES_DIR / name
+            dst.mkdir(parents=True, exist_ok=True)
+            for f in src.iterdir():
+                if f.is_file():
+                    shutil.move(str(f), str(dst / f.name))
+        shutil.rmtree(str(pending_role), ignore_errors=True)
+    
+    conn.commit()
+    conn.close()
+    log_audit('role_approve', role_name=name)
+    return jsonify({'name': name, 'approved': True})
+
+@app.route('/api/admin/approve-file', methods=['POST'])
+@require_admin
+def admin_approve_file():
+    """批准单个文件"""
+    data = request.get_json() or {}
+    file_type = data.get('type', '')
+    file_id = data.get('id', 0)
+    if not file_type or not file_id:
+        return jsonify({'error': '请指定文件类型和ID'}), 400
+    
+    conn = get_db()
+    if file_type == 'audio':
+        f = conn.execute("SELECT * FROM audio_files WHERE id=?", (file_id,)).fetchone()
+    else:
+        f = conn.execute("SELECT * FROM image_files WHERE id=?", (file_id,)).fetchone()
+    
+    if not f:
+        conn.close()
+        return jsonify({'error': '文件不存在'}), 404
+    
+    role_name = f['role_name']
+    filename = f['filename']
+    conn.close()  # 先关查询连接
+    
+    # 文件操作（不涉及数据库）
+    import shutil
+    if file_type == 'audio':
+        src = PENDING_DIR / role_name / 'audio' / f['category'] / filename
+        dst_dir = AUDIO_DIR / role_name / f['category']
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        if src.exists():
+            shutil.move(str(src), str(dst_dir / filename))
+        detail = f'音频/{f["category"]}/{filename}'
+    else:
+        src = PENDING_DIR / role_name / 'images' / filename
+        dst_dir = IMAGES_DIR / role_name
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        if src.exists():
+            shutil.move(str(src), str(dst_dir / filename))
+        detail = f'图片/{filename}'
+    
+    # 数据库操作
+    conn2 = get_db()
+    if file_type == 'audio':
+        conn2.execute("UPDATE audio_files SET status='approved' WHERE id=?", (file_id,))
+    else:
+        conn2.execute("UPDATE image_files SET status='approved' WHERE id=?", (file_id,))
+    conn2.commit()
+    conn2.close()
+    
+    log_audit('file_approve', role_name=role_name, detail=detail)
+    return jsonify({'id': file_id, 'type': file_type, 'status': 'approved'})
+
+@app.route('/api/admin/reject-file', methods=['POST'])
+@require_admin
+def admin_reject_file():
+    """拒绝单个文件"""
+    data = request.get_json() or {}
+    file_type = data.get('type', '')
+    file_id = data.get('id', 0)
+    if not file_type or not file_id:
+        return jsonify({'error': '请指定文件类型和ID'}), 400
+    
+    conn = get_db()
+    if file_type == 'audio':
+        f = conn.execute("SELECT * FROM audio_files WHERE id=?", (file_id,)).fetchone()
+    else:
+        f = conn.execute("SELECT * FROM image_files WHERE id=?", (file_id,)).fetchone()
+    
+    if not f:
+        conn.close()
+        return jsonify({'error': '文件不存在'}), 404
+    
+    role_name = f['role_name']
+    filename = f['filename']
+    conn.close()
+    
+    # 删除pending文件
+    if file_type == 'audio':
+        src = PENDING_DIR / role_name / 'audio' / f['category'] / filename
+        src.unlink(missing_ok=True)
+        detail = f'音频/{f["category"]}/{filename}'
+    else:
+        src = PENDING_DIR / role_name / 'images' / filename
+        src.unlink(missing_ok=True)
+        detail = f'图片/{filename}'
+    
+    # 数据库操作
+    conn2 = get_db()
+    if file_type == 'audio':
+        conn2.execute("UPDATE audio_files SET status='rejected' WHERE id=?", (file_id,))
+    else:
+        conn2.execute("UPDATE image_files SET status='rejected' WHERE id=?", (file_id,))
+    conn2.commit()
+    conn2.close()
+    
+    log_audit('file_reject', role_name=role_name, detail=detail)
+    return jsonify({'id': file_id, 'type': file_type, 'status': 'rejected'})
+
+@app.route('/api/admin/preview/<type>/<int:file_id>', methods=['GET'])
+@require_admin
+def admin_preview_file(type, file_id):
+    """管理员预览pending中的文件"""
+    conn = get_db()
+    if type == 'audio':
+        f = conn.execute("SELECT * FROM audio_files WHERE id=?", (file_id,)).fetchone()
+    else:
+        f = conn.execute("SELECT * FROM image_files WHERE id=?", (file_id,)).fetchone()
+    conn.close()
+    if not f:
+        abort(404)
+    
+    role_name = f['role_name']
+    filename = f['filename']
+    
+    # 先在正式目录找，再在pending目录找
+    if type == 'audio':
+        path = AUDIO_DIR / role_name / f['category'] / filename
+        if not path.exists():
+            path = PENDING_DIR / role_name / 'audio' / f['category'] / filename
+    else:
+        path = IMAGES_DIR / role_name / filename
+        if not path.exists():
+            path = PENDING_DIR / role_name / 'images' / filename
+    
+    if not path.exists():
+        abort(404)
+    
+    mime = mimetypes.guess_type(str(path))[0] or 'application/octet-stream'
+    return open(str(path), 'rb').read(), 200, {'Content-Type': mime}
+
+@app.route('/api/admin/reject', methods=['POST'])
+@require_admin
+def admin_reject():
+    """拒绝角色"""
+    data = request.get_json() or {}
+    name = data.get('name', '')
+    if not name:
+        return jsonify({'error': '请指定角色名'}), 400
+    
+    conn = get_db()
+    role = conn.execute("SELECT * FROM roles WHERE name=?", (name,)).fetchone()
+    if not role:
+        conn.close()
+        return jsonify({'error': '角色不存在'}), 404
+    
+    conn.execute("UPDATE roles SET approved=0, rejected=1, updated_at=? WHERE name=?", (now_ts(), name))
+    
+    # 清理pending文件
+    import shutil
+    pending_role = PENDING_DIR / name
+    if pending_role.exists():
+        shutil.rmtree(str(pending_role), ignore_errors=True)
+    
+    conn.commit()
+    conn.close()
+    log_audit('role_reject', role_name=name, detail=data.get('reason', ''))
+    return jsonify({'name': name, 'rejected': True})
+
+@app.route('/api/admin/audit', methods=['GET'])
+@require_admin
+def admin_audit():
+    limit = request.args.get('limit', 50, type=int)
+    conn = get_db()
+    logs = conn.execute(
+        "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return jsonify([dict(l) for l in logs])
+
+@app.route('/api/admin/devices', methods=['GET'])
+@require_admin
+def admin_devices():
+    conn = get_db()
+    devices = conn.execute("SELECT * FROM devices ORDER BY last_seen DESC").fetchall()
+    conn.close()
+    return jsonify([dict(d) for d in devices])
+
+@app.route('/api/admin/devices/<device_id>/toggle', methods=['POST'])
+@require_admin
+def admin_toggle_device(device_id):
+    conn = get_db()
+    dev = conn.execute("SELECT * FROM devices WHERE device_id=?", (device_id,)).fetchone()
+    if not dev:
+        conn.close()
+        return jsonify({'error': '设备不存在'}), 404
+    new_status = 0 if dev['approved'] else 1
+    conn.execute("UPDATE devices SET approved=? WHERE device_id=?", (new_status, device_id))
+    conn.commit()
+    conn.close()
+    log_audit('device_toggle', device_id=device_id, detail=f'approved={new_status}')
+    return jsonify({'device_id': device_id, 'approved': bool(new_status)})
 
 # ============================================================
-#  管理面板 (简易 WebUI)
+# 管理后台页面
 # ============================================================
+@app.route('/admin')
+@app.route('/admin/')
+def admin_page():
+    return render_template('admin.html')
 
-_MANAGE_HTML = r"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>角色分享服务器 - 管理</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:system-ui,sans-serif;background:#0f0f1a;color:#e0e0e0;min-height:100vh}
-.topbar{background:#1a1a2e;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #2a2a4a}
-.topbar h1{font-size:18px;color:#e94560}
-.main{max-width:900px;margin:24px auto;padding:0 24px}
-.card{background:#1a1a2e;border-radius:12px;border:1px solid #2a2a4a;padding:20px;margin-bottom:20px}
-.card h3{font-size:15px;color:#e94560;margin-bottom:12px}
-table{width:100%;border-collapse:collapse}
-th{text-align:left;padding:8px 10px;border-bottom:2px solid #2a2a4a;font-size:12px;color:#888}
-td{padding:8px 10px;border-bottom:1px solid #2a2a4a;font-size:13px}
-.badge{padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
-.ok{background:rgba(0,200,83,.15);color:#00c853}
-.warn{background:rgba(255,171,64,.15);color:#ffab40}
-.stat{display:inline-block;padding:4px 12px;background:#0f0f1a;border-radius:6px;font-size:12px;margin-right:8px}
-.btn{padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:12px;margin:4px}
-.btn-red{background:#e94560;color:#fff}
-.btn-green{background:#00c853;color:#fff}
-.btn-gray{background:#2a2a4a;color:#aaa}
-input{padding:8px 12px;border-radius:6px;border:1px solid #444;background:#0f0f1a;color:#e0e0e0;font-size:13px;margin:4px}
-textarea{width:100%;padding:10px;border-radius:6px;border:1px solid #444;background:#0f0f1a;color:#e0e0e0;font-family:monospace;font-size:12px;height:200px}
-.msg{display:none;padding:10px 14px;border-radius:6px;margin-top:8px;font-size:13px}
-.msg.show{display:block}
-.msg.ok{background:rgba(0,200,83,.1);color:#00c853}
-.msg.err{background:rgba(255,82,82,.1);color:#ff5252}
-</style></head><body>
-<div class="topbar"><h1>🎭 角色分享服务器</h1><div><span style="color:#888;font-size:12px">v1.0.0 | </span><input id="pwd" type="password" placeholder="管理密码" style="width:120px"><button class="btn btn-gray" onclick="login()">管理</button></div></div>
-<div class="main">
-<div class="card"><h3>📊 概览</h3>
-<div id="overview">加载中...</div></div>
-<div class="card"><h3>🎭 角色列表</h3>
-<div id="roleList">加载中...</div></div>
-<div class="card" id="deviceCard" style="display:none"><h3>📱 已注册设备</h3>
-<div id="deviceList"></div></div>
-<div class="card" id="changelogCard" style="display:none"><h3>📝 最近操作日志</h3>
-<div id="changelogList"></div></div>
-<div id="msg" class="msg"></div>
-</div>
-<script>
-var pwd='';
-function login(){pwd=document.getElementById('pwd').value;loadAll()}
-function showMsg(t,c){var m=document.getElementById('msg');m.textContent=t;m.className='msg show '+c;setTimeout(function(){m.className='msg'},4000)}
-async function loadAll(){
-try{
-var rr=await(await fetch('/api/roles')).json();
-var roles=rr.roles||[];
-document.getElementById('overview').innerHTML='<span class="stat">角色: '+roles.length+'</span><span class="stat">模式: '+rr.auth_mode+'</span>';
-var rh='';roles.forEach(function(r){rh+='<tr><td>'+r.name+'</td><td>v'+r.version+'</td><td>'+r.author+'</td><td>'+(r.size/1024).toFixed(0)+'KB</td><td>'+new Date(r.updated_at*1000).toLocaleDateString()+'</td></tr>'});
-document.getElementById('roleList').innerHTML=rh?'<table><tr><th>名称</th><th>版本</th><th>作者</th><th>大小</th><th>更新</th></tr>'+rh+'</table>':'暂无角色'
-if(pwd){
-document.getElementById('deviceCard').style.display='block';document.getElementById('changelogCard').style.display='block';
-var dr=await(await fetch('/api/devices?password='+pwd)).json();
-var dh='';Object.entries(dr.devices||{}).forEach(function(e){var d=e[1];dh+='<tr><td>'+d.name+'</td><td style="font-size:11px;color:#888">'+e[0]+'</td><td><span class="badge '+(d.approved?'ok':'warn')+'">'+(d.approved?'已批准':'待批准')+'</span></td><td>'+new Date(d.registered_at*1000).toLocaleDateString()+'</td></tr>'});
-document.getElementById('deviceList').innerHTML=dh?'<table><tr><th>名称</th><th>设备ID</th><th>状态</th><th>注册时间</th></tr>'+dh+'</table>':'暂无设备'
-var cr=await(await fetch('/api/changelog')).json();
-var ch='';cr.entries.forEach(function(e){ch+='<tr><td>'+e.action+'</td><td>'+e.role+'</td><td style="font-size:11px;color:#888">'+e.device+'</td><td style="font-size:11px;color:#888">'+e.detail+'</td><td style="font-size:11px">'+new Date(e.time*1000).toLocaleString()+'</td></tr>'});
-document.getElementById('changelogList').innerHTML=ch?'<table><tr><th>操作</th><th>角色</th><th>设备</th><th>详情</th><th>时间</th></tr>'+ch+'</table>':'暂无日志'
-}
-}catch(e){showMsg('加载失败: '+e.message,'err')}
-}
-loadAll();
-</script></body></html>"""
+@app.route('/upload')
+@app.route('/upload/')
+def upload_page():
+    return render_template('upload.html')
 
+@app.route('/create')
+@app.route('/create/')
+def create_role_page():
+    return render_template('create.html')
 
-@app.route("/", methods=["GET"])
-def serve_manage():
-    return render_template_string(_MANAGE_HTML)
+# ============================================================
+# 静态文件（公开API文件的访问通过角色路由）
+# ============================================================
+# 注意：音频/图片文件通过 /api/roles/<name>/audio/<cat>/<file> 访问
+# pending中的文件不对外公开
 
-
-if __name__ == "__main__":
-    load_config()
-    load_devices()
-    load_changelog()
-    roles_dir().mkdir(parents=True, exist_ok=True)
-    print(f"\n🎭 角色分享服务器已启动")
-    print(f"   地址: http://{config['host']}:{config['port']}")
-    print(f"   认证: {config['auth_mode']}")
-    print(f"   角色: {len(scan_roles())} 个")
-    print(f"   设备: {len(registered_devices)} 台\n")
-    app.run(host=config["host"], port=config["port"], debug=False)
+# ============================================================
+# 启动
+# ============================================================
+if __name__ == '__main__':
+    init_db()
+    print(f"[start] 角色分享服务器已启动 http://{HOST}:{PORT}")
+    app.run(host=HOST, port=PORT, debug=False)

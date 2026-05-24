@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>kunxun.top 管理后台</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #1a1a2e; color: #e0e0e0; min-height: 100vh;
+}
+
+/* Login */
+.login-page { display:flex; align-items:center; justify-content:center; min-height:100vh; padding:20px; }
+.login-box {
+  background:#1a1a2e; border:1px solid #2a2a4a; border-radius:16px;
+  padding:40px; width:100%; max-width:380px;
+}
+.login-box h1 { text-align:center; margin-bottom:24px; font-size:1.3em; color:#e94560; }
+.login-box input {
+  width:100%; padding:12px 16px; margin-bottom:12px;
+  border-radius:10px; border:1px solid #2a2a4a;
+  background:#16213e; color:#e0e0e0; font-size:0.95em; outline:none;
+}
+.login-box input:focus { border-color:#e94560; }
+.login-box button {
+  width:100%; padding:12px; border-radius:10px; border:none;
+  background:#e94560; color:#fff; font-size:1em; cursor:pointer; font-weight:600;
+}
+.login-box button:hover { opacity:0.9; }
+.login-err { color:#ef4444; font-size:0.85em; text-align:center; margin-bottom:12px; display:none; }
+
+/* App */
+.app { display:none; }
+.app.show { display:block; }
+.nav {
+  display:flex; align-items:center; gap:4px;
+  background:#16213e; border-bottom:1px solid #2a2a4a; padding:0 16px;
+  position:sticky; top:0; z-index:10; overflow-x:auto;
+}
+.nav a {
+  padding:14px 18px; color:#888; text-decoration:none; font-size:0.9em;
+  border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap;
+  transition:.2s; font-family:inherit; background:none; border-top:none; border-left:none; border-right:none;
+}
+.nav a:hover { color:#e0e0e0; }
+.nav a.active { color:#e94560; border-bottom-color:#e94560; }
+.nav .spacer { flex:1; }
+.nav .logout { color:#666; font-size:0.8em; }
+.nav .logout:hover { color:#ef4444; }
+
+/* Main */
+.main { padding:24px 32px; max-width:1400px; margin:0 auto; }
+.main h1 { font-size:1.4em; margin-bottom:4px; }
+.main .sub { color:#888; font-size:0.85em; margin-bottom:20px; }
+
+/* Stats */
+.stats { display:flex; gap:16px; margin-bottom:24px; flex-wrap:wrap; }
+.stat-card {
+  background:#1a1a2e; border:1px solid #2a2a4a; border-radius:12px;
+  padding:16px 24px; min-width:130px; flex:1;
+}
+.stat-card .num { font-size:1.8em; font-weight:700; color:#e94560; }
+.stat-card .label { font-size:0.8em; color:#888; margin-top:4px; }
+
+/* Table */
+.table-wrap {
+  background:#1a1a2e; border:1px solid #2a2a4a; border-radius:12px; overflow:hidden;
+}
+table { width:100%; border-collapse:collapse; }
+th { text-align:left; padding:12px 16px; font-size:0.8em; color:#888; border-bottom:1px solid #2a2a4a; }
+td { padding:12px 16px; font-size:0.9em; border-bottom:1px solid #16213e; }
+tr:hover td { background:rgba(233,69,96,0.03); }
+tr.pending-row td { background:rgba(255,171,64,0.05); }
+
+.badge {
+  display:inline-block; padding:2px 10px; border-radius:10px; font-size:0.78em;
+}
+.badge.approved { background:rgba(0,200,83,0.15); color:#00c853; border:1px solid rgba(0,200,83,0.3); }
+.badge.pending { background:rgba(255,171,64,0.15); color:#ffab40; border:1px solid rgba(255,171,64,0.3); }
+.badge.rejected { background:rgba(239,68,68,0.15); color:#ef4444; border:1px solid rgba(239,68,68,0.3); }
+
+.actions { display:flex; gap:6px; flex-wrap:wrap; }
+.actions button {
+  padding:4px 12px; border-radius:8px; border:1px solid #2a2a4a;
+  background:transparent; color:#999; cursor:pointer; font-size:0.78em;
+  transition:.2s; font-family:inherit;
+}
+.actions button:hover { border-color:#e94560; color:#e94560; }
+.actions .danger:hover { border-color:#ef4444; color:#ef4444; }
+.actions .success:hover { border-color:#00c853; color:#00c853; }
+.actions .warn:hover { border-color:#ffab40; color:#ffab40; }
+
+.empty { padding:60px; text-align:center; color:#666; }
+
+/* Search */
+.search-bar { display:flex; gap:8px; margin-bottom:16px; }
+.search-bar input {
+  flex:1; padding:10px 14px; border-radius:10px; border:1px solid #2a2a4a;
+  background:#16213e; color:#e0e0e0; font-size:0.9em; outline:none;
+}
+.search-bar input:focus { border-color:#e94560; }
+.search-bar button {
+  padding:10px 20px; border-radius:10px; border:none;
+  background:#e94560; color:#fff; cursor:pointer; font-weight:600;
+}
+
+/* Modal */
+.modal {
+  display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+  background:rgba(0,0,0,0.6); backdrop-filter:blur(4px); z-index:100;
+  align-items:center; justify-content:center; padding:20px;
+}
+.modal.show { display:flex; }
+.modal-box {
+  background:#1a1a2e; border:1px solid #2a2a4a; border-radius:16px;
+  padding:28px; width:100%; max-width:520px; max-height:80vh; overflow-y:auto;
+}
+.modal-box h2 { font-size:1.1em; margin-bottom:20px; }
+.modal-box label { display:block; font-size:0.85em; color:#888; margin-bottom:4px; margin-top:12px; }
+.modal-box input, .modal-box textarea, .modal-box select {
+  width:100%; padding:10px 14px; border-radius:10px; border:1px solid #2a2a4a;
+  background:#16213e; color:#e0e0e0; font-size:0.9em; outline:none; font-family:inherit;
+}
+.modal-box textarea { min-height:80px; resize:vertical; }
+.modal-box input:focus, .modal-box textarea:focus { border-color:#e94560; }
+.modal-box .btn-row { margin-top:20px; display:flex; gap:10px; justify-content:flex-end; }
+.modal-box .btn-row button {
+  padding:10px 24px; border-radius:10px; border:none; cursor:pointer;
+  font-size:0.9em; font-family:inherit; font-weight:500; transition:.2s;
+}
+.modal-box .btn-primary { background:#e94560; color:#fff; }
+.modal-box .btn-cancel { background:transparent; border:1px solid #2a2a4a; color:#888; }
+.modal-box .btn-cancel:hover { border-color:#666; color:#e0e0e0; }
+.modal-box .btn-danger { background:transparent; border:1px solid #ef4444; color:#ef4444; }
+.modal-box .btn-danger:hover { background:#ef4444; color:#fff; }
+
+/* Toast */
+.toast {
+  position:fixed; top:20px; right:20px; padding:12px 20px; border-radius:10px;
+  background:#1a1a2e; border:1px solid #2a2a4a; color:#e0e0e0; font-size:0.9em;
+  z-index:200; display:none; animation:slideIn .3s ease;
+}
+.toast.error { border-color:#ef4444; }
+.toast.success { border-color:#00c853; }
+@keyframes slideIn { from { transform:translateX(100px); opacity:0; } }
+</style>
+</head>
+<body>
+
+<div class="login-page" id="loginPage">
+  <div class="login-box">
+    <h1>kunxun.top</h1>
+    <div class="login-err" id="loginErr"></div>
+    <input type="text" id="loginUser" placeholder="用户名" autocomplete="username">
+    <input type="password" id="loginPass" placeholder="密码" autocomplete="current-password">
+    <button onclick="login()">登录</button>
+  </div>
+</div>
+
+<div class="app" id="app">
+  <div class="nav">
+    <a class="active" onclick="showTab('dashboard')" id="tab-dashboard">📊 概览</a>
+    <a onclick="showTab('roles')" id="tab-roles">📦 角色管理</a>
+    <a onclick="showTab('pending')" id="tab-pending">⏳ 待审核</a>
+    <a onclick="showTab('devices')" id="tab-devices">📱 设备</a>
+    <a onclick="showTab('audit')" id="tab-audit">📋 审计日志</a>
+    <span class="spacer"></span>
+    <a class="logout" onclick="logout()">🚪 退出</a>
+  </div>
+  
+  <div class="main">
+    <!-- Dashboard -->
+    <div id="page-dashboard">
+      <h1>📊 概览</h1>
+      <div class="sub">角色分享服务器</div>
+      <div class="stats" id="stats">
+        <div class="stat-card"><div class="num" id="statRoles">-</div><div class="label">角色</div></div>
+        <div class="stat-card"><div class="num" id="statPending">-</div><div class="label">待审核</div></div>
+        <div class="stat-card"><div class="num" id="statDevices">-</div><div class="label">设备</div></div>
+        <div class="stat-card"><div class="num" id="statAudio">-</div><div class="label">音频</div></div>
+        <div class="stat-card"><div class="num" id="statImages">-</div><div class="label">图片</div></div>
+      </div>
+      <div class="table-wrap">
+        <table><thead><tr><th>角色名</th><th>作者</th><th>状态</th><th>版本</th><th>更新时间</th></tr></thead>
+        <tbody id="dashboardTable"></tbody></table>
+      </div>
+    </div>
+    
+    <!-- Roles -->
+    <div id="page-roles" style="display:none">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+        <h1>📦 角色管理</h1>
+        <button onclick="openCreateModal()" style="padding:10px 20px;border-radius:10px;border:none;background:#e94560;color:#fff;cursor:pointer;font-weight:600;font-family:inherit">+ 新建</button>
+      </div>
+      <div class="search-bar">
+        <input type="text" id="roleSearch" placeholder="搜索角色名..." oninput="filterRoles()">
+      </div>
+      <div class="table-wrap">
+        <table><thead><tr><th>角色名</th><th>作者</th><th>版本</th><th>状态</th><th>音频</th><th>图片</th><th>操作</th></tr></thead>
+        <tbody id="rolesTable"></tbody></table>
+      </div>
+    </div>
+    
+    <!-- Pending -->
+    <div id="page-pending" style="display:none">
+      <h1>⏳ 待审核</h1>
+      <div class="sub">等待审批的音频和图片文件</div>
+      
+      <h2 style="margin:16px 0 8px;font-size:1em;color:#e94560">🎵 音频</h2>
+      <div class="table-wrap">
+        <table><thead><tr><th>文件名</th><th>角色</th><th>分类</th><th>大小</th><th>预览</th><th>上传时间</th><th>操作</th></tr></thead>
+        <tbody id="pendingAudioTable"></tbody></table>
+      </div>
+      
+      <h2 style="margin:16px 0 8px;font-size:1em;color:#e94560">🖼️ 图片</h2>
+      <div class="table-wrap">
+        <table><thead><tr><th>文件名</th><th>角色</th><th>大小</th><th>预览</th><th>上传时间</th><th>操作</th></tr></thead>
+        <tbody id="pendingImageTable"></tbody></table>
+      </div>
+    </div>
+    
+    <!-- Devices -->
+    <div id="page-devices" style="display:none">
+      <h1>📱 设备管理</h1>
+      <div class="sub">已注册的客户端设备</div>
+      <div class="table-wrap">
+        <table><thead><tr><th>设备ID</th><th>名称</th><th>状态</th><th>注册时间</th><th>最后活跃</th><th>操作</th></tr></thead>
+        <tbody id="devicesTable"></tbody></table>
+      </div>
+    </div>
+    
+    <!-- Audit -->
+    <div id="page-audit" style="display:none">
+      <h1>📋 审计日志</h1>
+      <div class="sub">所有操作记录</div>
+      <div class="table-wrap">
+        <table><thead><tr><th>时间</th><th>操作</th><th>角色</th><th>设备</th><th>详情</th></tr></thead>
+        <tbody id="auditTable"></tbody></table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Create/Edit Modal -->
+<div class="modal" id="roleModal">
+  <div class="modal-box">
+    <h2 id="modalTitle">新建角色</h2>
+    <input type="hidden" id="editName">
+    <label>角色名称 *</label>
+    <input type="text" id="roleName" placeholder="如: 绪山真寻">
+    <label>作者</label>
+    <input type="text" id="roleAuthor" placeholder="如: Kun-xui">
+    <label>简介</label>
+    <textarea id="roleDesc" placeholder="角色介绍..."></textarea>
+    <label>版本</label>
+    <input type="text" id="roleVersion" placeholder="1.0.0" value="1.0.0">
+    <label>下载链接</label>
+    <input type="url" id="roleDownload" placeholder="https://github.com/.../release/...zip">
+    <hr style="border-color:#2a2a4a;margin:16px 0">
+    <label>展示标签（逗号分隔）</label>
+    <input type="text" id="roleTags" placeholder="如: AstrBot, 语音, 立绘">
+    <label>展示简介（可选，留空用默认简介）</label>
+    <textarea id="roleDisplayDesc" placeholder="对外展示的角色介绍..." style="height:60px"></textarea>
+    <label>角色封面预览图</label>
+    <div id="previewArea" style="
+      background:#12122e; border:1px dashed #2a2a4a; border-radius:10px;
+      padding:12px; margin-bottom:4px;
+    ">
+      <div id="previewCurrent" style="display:none;margin-bottom:10px">
+        <img id="previewImg" style="max-width:100%;max-height:160px;border-radius:8px;display:block;margin-bottom:8px">
+        <button class="btn-danger" id="removePreviewBtn" style="padding:4px 12px;font-size:0.8em" onclick="removePreview()">🗑️ 删除预览图</button>
+        <div style="font-size:0.75em;color:#888;margin-top:4px">当前封面预览图</div>
+      </div>
+      <div id="previewEmpty" style="text-align:center;padding:16px 0;color:#666;font-size:0.85em">
+        🖼️ 暂无自定义封面预览图<br>
+        <span style="font-size:0.8em">上传图片作为角色在官网的封面</span>
+      </div>
+      <input type="file" id="previewFileInput" accept="image/jpeg,image/png,image/gif,image/webp" style="display:none">
+      <button class="btn-primary" onclick="document.getElementById('previewFileInput').click()" style="width:100%;margin-top:8px">
+        📤 上传封面图
+      </button>
+      <div id="previewUploadStatus" style="font-size:0.8em;color:#888;margin-top:6px;text-align:center"></div>
+    </div>
+    <input type="hidden" id="rolePreviewFilename" value="">
+    <div class="btn-row">
+      <button class="btn-cancel" onclick="closeModal()">取消</button>
+      <button class="btn-primary" id="modalSaveBtn" onclick="saveRole()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ======================== Auth ========================
+async function login() {
+  const user = document.getElementById('loginUser').value;
+  const pass = document.getElementById('loginPass').value;
+  try {
+    const res = await fetch('/api/admin/login', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username:user, password:pass})
+    });
+    const data = await res.json();
+    if (!res.ok) { showLoginErr(data.error||'登录失败'); return; }
+    document.getElementById('loginPage').style.display = 'none';
+    document.getElementById('app').classList.add('show');
+    loadDashboard();
+  } catch(e) { showLoginErr('网络错误'); }
+}
+
+function showLoginErr(msg) {
+  document.getElementById('loginErr').textContent = msg;
+  document.getElementById('loginErr').style.display = 'block';
+}
+
+async function logout() {
+  await fetch('/api/admin/logout', {method:'POST'});
+  document.getElementById('app').classList.remove('show');
+  document.getElementById('loginPage').style.display = 'flex';
+}
+
+// ======================== Router ========================
+function showTab(name) {
+  document.querySelectorAll('.nav a').forEach(a => a.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  document.querySelectorAll('.main > div').forEach(d => d.style.display = 'none');
+  document.getElementById(`page-${name}`).style.display = 'block';
+  if (name === 'dashboard') loadDashboard();
+  if (name === 'roles') loadRoles();
+  if (name === 'pending') loadPending();
+  if (name === 'devices') loadDevices();
+  if (name === 'audit') loadAudit();
+}
+
+// ======================== API ========================
+async function api(url, opts={}) {
+  const res = await fetch(url, opts);
+  const data = await res.json().catch(()=>({}));
+  if (res.status === 401) { logout(); return null; }
+  if (!res.ok) { toast(data.error || '请求失败', 'error'); return null; }
+  return data;
+}
+
+// ======================== Dashboard ========================
+async function loadDashboard() {
+  const roles = await api('/api/admin/roles');
+  if (!roles) return;
+  const approved = roles.filter(r => r.approved).length;
+  const pendingRoles = roles.filter(r => !r.approved && !r.rejected).length;
+  const rejected = roles.filter(r => r.rejected).length;
+  
+  // 获取待审核文件数
+  const ping = await api('/api/ping');
+  const pendingFiles = ping ? (ping.pending_files || 0) : 0;
+  
+  let audioCount = 0, imageCount = 0;
+  const deviceRes = await api('/api/admin/devices');
+  const deviceCount = deviceRes ? deviceRes.length : '-';
+  
+  for (const r of roles) {
+    const detail = await api(`/api/roles/${encodeURIComponent(r.name)}`).catch(()=>null);
+    if (detail) {
+      audioCount += (detail.audio||[]).length;
+      imageCount += (detail.images||[]).length;
+    }
+  }
+  
+  document.getElementById('statRoles').textContent = roles.length;
+  document.getElementById('statPending').textContent = pendingRoles + pendingFiles ? `${pendingRoles} + ${pendingFiles}文件` : '0';
+  document.getElementById('statDevices').textContent = deviceCount;
+  document.getElementById('statAudio').textContent = audioCount;
+  document.getElementById('statImages').textContent = imageCount;
+  
+  document.getElementById('dashboardTable').innerHTML = roles.slice(0,10).map(r => `
+    <tr class="${!r.approved && !r.rejected ? 'pending-row' : ''}">
+      <td>${r.name}</td>
+      <td>${r.author||'-'}</td>
+      <td><span class="badge ${r.approved ? 'approved' : r.rejected ? 'rejected' : 'pending'}">${r.approved ? '已通过' : r.rejected ? '已拒绝' : '待审核'}</span></td>
+      <td>v${r.version}</td>
+      <td>${r.updated_at ? new Date(r.updated_at*1000).toLocaleString() : '-'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" class="empty">暂无角色</td></tr>';
+}
+
+// ======================== Roles ========================
+let allRoles = [];
+
+async function loadRoles() {
+  const roles = await api('/api/admin/roles');
+  if (!roles) return;
+  allRoles = roles;
+  renderRoles(roles);
+}
+
+function filterRoles() {
+  const q = document.getElementById('roleSearch').value.toLowerCase();
+  renderRoles(allRoles.filter(r => r.name.toLowerCase().includes(q)));
+}
+
+function renderRoles(roles) {
+  document.getElementById('rolesTable').innerHTML = roles.map(r => `
+    <tr class="${!r.approved && !r.rejected ? 'pending-row' : ''}">
+      <td>${r.name}</td>
+      <td>${r.author||'-'}</td>
+      <td>v${r.version}</td>
+      <td><span class="badge ${r.approved ? 'approved' : r.rejected ? 'rejected' : 'pending'}">${r.approved ? '已通过' : r.rejected ? '已拒绝' : '待审核'}</span></td>
+      <td id="ac_${r.name}">-</td>
+      <td id="ic_${r.name}">-</td>
+      <td>
+        <div class="actions">
+          <button onclick="openEditModal('${r.name}')">编辑</button>
+          ${!r.approved ? `<button class="success" onclick="setStatus('${r.name}','approve')">通过</button>` : ''}
+          ${!r.rejected ? `<button class="danger" onclick="setStatus('${r.name}','reject')">拒绝</button>` : ''}
+          <button class="danger" onclick="deleteRole('${r.name}')">删除</button>
+        </div>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" class="empty">暂无角色</td></tr>';
+  
+  // 异步获取音频/图片数量
+  roles.forEach(r => {
+    api(`/api/roles/${encodeURIComponent(r.name)}`).then(d => {
+      if (d) {
+        const ac = document.getElementById(`ac_${r.name}`);
+        const ic = document.getElementById(`ic_${r.name}`);
+        if (ac) ac.textContent = (d.audio||[]).length;
+        if (ic) ic.textContent = (d.images||[]).length;
+      }
+    });
+  });
+}
+
+async function setStatus(name, action) {
+  const reason = action === 'reject' ? prompt('拒绝原因（可选）:') : '';
+  if (action === 'reject' && reason === null) return;
+  const data = await api(`/api/admin/${action}`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name, reason})
+  });
+  if (data) {
+    toast(`已${action==='approve'?'通过':'拒绝'}`, 'success');
+    loadRoles();
+    loadPending();
+  }
+}
+
+async function deleteRole(name) {
+  if (!confirm(`确定删除角色「${name}」？`)) return;
+  const data = await api(`/api/admin/roles/${encodeURIComponent(name)}`, {method:'DELETE'});
+  if (data) { toast('已删除', 'success'); loadRoles(); loadDashboard(); }
+}
+
+// ======================== Pending ========================
+async function loadPending() {
+  const data = await api('/api/admin/pending');
+  if (!data) return;
+  
+  // 音频
+  const audio = data.audio || [];
+  document.getElementById('pendingAudioTable').innerHTML = audio.map(f => `
+    <tr class="pending-row">
+      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.filename}</td>
+      <td>${f.role_name}</td>
+      <td>${f.category}</td>
+      <td>${(f.size/1024).toFixed(1)}KB</td>
+      <td><audio controls style="height:30px;width:120px"><source src="/api/admin/preview/audio/${f.id}" type="audio/wav"></audio></td>
+      <td>${f.created_at ? new Date(f.created_at*1000).toLocaleString() : '-'}</td>
+      <td>
+        <div class="actions">
+          <button class="success" onclick="approveFile('audio',${f.id})">✅ 通过</button>
+          <button class="danger" onclick="rejectFile('audio',${f.id})">❌ 拒绝</button>
+        </div>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="7" class="empty">暂无待审核音频</td></tr>';
+  
+  // 图片
+  const images = data.images || [];
+  document.getElementById('pendingImageTable').innerHTML = images.map(f => `
+    <tr class="pending-row">
+      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.filename}</td>
+      <td>${f.role_name}</td>
+      <td>${(f.size/1024).toFixed(1)}KB</td>
+      <td><img src="/api/admin/preview/image/${f.id}" style="max-width:80px;max-height:40px;border-radius:4px;cursor:pointer" onclick="window.open('/api/admin/preview/image/${f.id}')" onerror="this.style.display='none'"></td>
+      <td>${f.created_at ? new Date(f.created_at*1000).toLocaleString() : '-'}</td>
+      <td>
+        <div class="actions">
+          <button class="success" onclick="approveFile('image',${f.id})">✅ 通过</button>
+          <button class="danger" onclick="rejectFile('image',${f.id})">❌ 拒绝</button>
+        </div>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" class="empty">暂无待审核图片</td></tr>';
+}
+
+async function approveFile(type, id) {
+  const data = await api('/api/admin/approve-file', {method:'POST', body: JSON.stringify({type, id}), headers:{'Content-Type':'application/json'}});
+  if (data) { toast('✅ 已通过', 'success'); loadPending(); loadDashboard(); }
+}
+
+async function rejectFile(type, id) {
+  const data = await api('/api/admin/reject-file', {method:'POST', body: JSON.stringify({type, id}), headers:{'Content-Type':'application/json'}});
+  if (data) { toast('❌ 已拒绝', 'success'); loadPending(); loadDashboard(); }
+}
+
+// ======================== Devices ========================
+async function loadDevices() {
+  const devices = await api('/api/admin/devices');
+  if (!devices) return;
+  document.getElementById('devicesTable').innerHTML = devices.map(d => `
+    <tr>
+      <td style="font-family:monospace;font-size:0.85em">${d.device_id}</td>
+      <td>${d.name||'-'}</td>
+      <td><span class="badge ${d.approved ? 'approved' : 'rejected'}">${d.approved ? '已批准' : '已禁用'}</span></td>
+      <td>${d.registered_at ? new Date(d.registered_at*1000).toLocaleString() : '-'}</td>
+      <td>${d.last_seen ? new Date(d.last_seen*1000).toLocaleString() : '-'}</td>
+      <td>
+        <div class="actions">
+          <button class="${d.approved ? 'danger' : 'success'}" onclick="toggleDevice('${d.device_id}')">
+            ${d.approved ? '禁用' : '启用'}
+          </button>
+        </div>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="6" class="empty">暂无设备</td></tr>';
+}
+
+async function toggleDevice(id) {
+  const data = await api(`/api/admin/devices/${encodeURIComponent(id)}/toggle`, {method:'POST'});
+  if (data) { toast('已更新', 'success'); loadDevices(); }
+}
+
+// ======================== Audit ========================
+async function loadAudit() {
+  const logs = await api('/api/admin/audit?limit=100');
+  if (!logs) return;
+  document.getElementById('auditTable').innerHTML = logs.map(l => `
+    <tr>
+      <td style="white-space:nowrap">${l.created_at ? new Date(l.created_at*1000).toLocaleString() : '-'}</td>
+      <td><span class="badge ${l.action.includes('approve')||l.action.includes('login')?'approved':l.action.includes('reject')||l.action.includes('delete')?'rejected':'pending'}">${l.action}</span></td>
+      <td>${l.role_name||'-'}</td>
+      <td style="font-family:monospace;font-size:0.8em">${(l.device_id||'').slice(0,16)||'-'}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.detail||'-'}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" class="empty">暂无日志</td></tr>';
+}
+
+// ======================== Create/Edit ========================
+function openCreateModal() {
+  document.getElementById('modalTitle').textContent = '新建角色';
+  document.getElementById('modalSaveBtn').textContent = '创建';
+  document.getElementById('editName').value = '';
+  ['roleName','roleAuthor','roleDesc','roleVersion','roleDownload'].forEach(id => {
+    document.getElementById(id).value = id === 'roleVersion' ? '1.0.0' : '';
+  });
+  document.getElementById('roleModal').classList.add('show');
+}
+
+async function openEditModal(name) {
+  const roles = allRoles.length ? allRoles : await api('/api/admin/roles');
+  if (!roles) return;
+  const role = roles.find(r => r.name === name);
+  if (!role) return;
+  document.getElementById('modalTitle').textContent = '编辑角色';
+  document.getElementById('modalSaveBtn').textContent = '保存';
+  document.getElementById('editName').value = role.name;
+  document.getElementById('roleName').value = role.name;
+  document.getElementById('roleAuthor').value = role.author;
+  document.getElementById('roleDesc').value = role.desc;
+  document.getElementById('roleVersion').value = role.version;
+  document.getElementById('roleDownload').value = role.download_url;
+  document.getElementById('roleTags').value = role.tags || '';
+  document.getElementById('roleDisplayDesc').value = role.display_desc || '';
+  document.getElementById('rolePreviewFilename').value = role.preview_filename || '';
+  // 显示预览图
+  renderPreview(role);
+  document.getElementById('roleModal').classList.add('show');
+}
+
+function renderPreview(role) {
+  const currentDiv = document.getElementById('previewCurrent');
+  const emptyDiv = document.getElementById('previewEmpty');
+  const previewFn = role.preview_filename || '';
+  
+  if (previewFn) {
+    const slug = role.slug || role.name;
+    currentDiv.style.display = 'block';
+    emptyDiv.style.display = 'none';
+    document.getElementById('previewImg').src = `/api/roles/${encodeURIComponent(slug)}/images/${previewFn}`;
+    document.getElementById('previewImg').onerror = function() {
+      this.style.display = 'none';
+      document.getElementById('removePreviewBtn').textContent = '🗑️ 清除无效预览图';
+    };
+  } else {
+    currentDiv.style.display = 'none';
+    emptyDiv.style.display = 'block';
+  }
+}
+
+// 预览图上传
+document.getElementById('previewFileInput').addEventListener('change', async function() {
+  const file = this.files[0];
+  if (!file) return;
+  
+  const statusEl = document.getElementById('previewUploadStatus');
+  const roleName = document.getElementById('editName').value || document.getElementById('roleName').value;
+  if (!roleName) { statusEl.textContent = '⚠️ 请先保存角色'; return; }
+  
+  if (file.size > 10 * 1024 * 1024) {
+    statusEl.textContent = '⚠️ 图片不能超过10MB';
+    return;
+  }
+  
+  const ext = file.name.split('.').pop().toLowerCase();
+  if (!['jpg','jpeg','png','gif','webp'].includes(ext)) {
+    statusEl.textContent = '⚠️ 仅支持 jpg/png/gif/webp';
+    return;
+  }
+  
+  statusEl.textContent = '⏳ 上传中...';
+  
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  try {
+    const res = await fetch(`/api/admin/roles/${encodeURIComponent(roleName)}/preview`, {
+      method: 'POST',
+      body: formData
+    });
+    const data = await res.json();
+    if (res.ok) {
+      document.getElementById('rolePreviewFilename').value = data.filename;
+      // 更新预览显示
+      document.getElementById('previewImg').src = data.url + '?t=' + Date.now();
+      document.getElementById('previewImg').style.display = 'block';
+      document.getElementById('previewCurrent').style.display = 'block';
+      document.getElementById('previewEmpty').style.display = 'none';
+      document.getElementById('removePreviewBtn').textContent = '🗑️ 删除预览图';
+      statusEl.textContent = '✅ 预览图上传成功！保存角色后生效';
+      statusEl.style.color = '#00c853';
+      this.value = '';
+    } else {
+      statusEl.textContent = '❌ ' + (data.error || '上传失败');
+      statusEl.style.color = '#ef4444';
+    }
+  } catch(e) {
+    statusEl.textContent = '❌ 网络错误';
+    statusEl.style.color = '#ef4444';
+  }
+});
+
+async function removePreview() {
+  if (!confirm('确定删除角色封面预览图？')) return;
+  const roleName = document.getElementById('editName').value;
+  if (!roleName) return;
+  
+  const data = await api(`/api/admin/roles/${encodeURIComponent(roleName)}/preview`, {method:'DELETE'});
+  if (data) {
+    document.getElementById('rolePreviewFilename').value = '';
+    document.getElementById('previewCurrent').style.display = 'none';
+    document.getElementById('previewEmpty').style.display = 'block';
+    document.getElementById('previewUploadStatus').textContent = '🗑️ 预览图已删除';
+    document.getElementById('previewUploadStatus').style.color = '#888';
+  }
+}
+
+function closeModal() { document.getElementById('roleModal').classList.remove('show'); }
+
+async function saveRole() {
+  const editName = document.getElementById('editName').value;
+  const data = {
+    name: document.getElementById('roleName').value,
+    author: document.getElementById('roleAuthor').value,
+    desc: document.getElementById('roleDesc').value,
+    version: document.getElementById('roleVersion').value || '1.0.0',
+    download_url: document.getElementById('roleDownload').value,
+    tags: document.getElementById('roleTags').value,
+    display_desc: document.getElementById('roleDisplayDesc').value,
+    preview_filename: document.getElementById('rolePreviewFilename').value || '',
+  };
+  if (!data.name) { toast('角色名不能为空', 'error'); return; }
+  
+  if (editName) {
+    const result = await api(`/api/admin/roles/${encodeURIComponent(editName)}`, {
+      method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+    });
+    if (result) { toast('已更新', 'success'); closeModal(); loadRoles(); }
+  } else {
+    const result = await api('/api/admin/roles', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)
+    });
+    if (result) { toast('已创建', 'success'); closeModal(); loadRoles(); }
+  }
+}
+
+// ======================== Toast ========================
+function toast(msg, type='') {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.className = 'toast ' + type;
+  el.style.display = 'block';
+  setTimeout(() => { el.style.display = 'none'; }, 3000);
+}
+
+// ======================== Init ========================
+(async function() {
+  const check = await api('/api/admin/me').catch(()=>null);
+  if (check) {
+    document.getElementById('loginPage').style.display = 'none';
+    document.getElementById('app').classList.add('show');
+    loadDashboard();
+  } else {
+    document.getElementById('loginPage').style.display = 'flex';
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Runtime data
+*.db
+audio/
+images/
+pending/
+uploads/
+__pycache__/
+*.pyc
+
+# Config (copy config.example.yaml to config.yaml)
+config.yaml
+
+# OS
+.DS_Store
+Thumbs.db

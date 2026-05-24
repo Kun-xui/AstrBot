@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>kunxun.top - 创建角色</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #1a1a2e; color: #e0e0e0; min-height: 100vh; padding:20px;
+}
+.container { max-width:600px; margin:40px auto; }
+h1 { text-align:center; color:#e94560; font-size:1.5em; margin-bottom:4px; }
+.sub { text-align:center; color:#888; font-size:0.85em; margin-bottom:24px; }
+
+.card {
+  background:#1a1a2e; border:1px solid #2a2a4a; border-radius:16px;
+  padding:28px; margin-bottom:16px;
+}
+.card h2 { font-size:1em; margin-bottom:16px; color:#e94560; }
+
+.bandwidth-notice {
+  background: rgba(233,69,96,0.08);
+  border: 1px solid rgba(233,69,96,0.2);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 0.82em;
+  color: #f0a0b0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.bandwidth-notice .icon { font-size: 1.3em; }
+
+label { display:block; font-size:0.85em; color:#888; margin-bottom:4px; margin-top:12px; }
+label:first-child { margin-top:0; }
+input, textarea, select {
+  width:100%; padding:10px 14px; border-radius:10px; border:1px solid #2a2a4a;
+  background:#16213e; color:#e0e0e0; font-size:0.9em; outline:none;
+  font-family:inherit;
+}
+textarea { resize:vertical; min-height:60px; }
+input:focus, textarea:focus { border-color:#e94560; }
+input[type=file] { padding:8px; }
+
+.file-section {
+  margin-top: 8px;
+  padding: 16px;
+  background: #12122a;
+  border-radius: 10px;
+  border: 1px dashed #2a2a4a;
+}
+.file-section .hint { font-size:0.78em; color:#666; margin-top:4px; }
+
+.btn {
+  width:100%; padding:12px; margin-top:16px;
+  border-radius:10px; border:none; background:#e94560; color:#fff;
+  font-size:1em; cursor:pointer; font-weight:600; font-family:inherit;
+}
+.btn:hover { opacity:0.9; }
+.btn:disabled { opacity:0.5; cursor:not-allowed; }
+.btn-secondary { background:transparent; border:1px solid #2a2a4a; color:#888; margin-top:8px; }
+
+.result-box {
+  display:none; margin-top:16px; padding:16px; border-radius:10px;
+  background:#16213e; border:1px solid #2a2a4a; font-size:0.9em;
+}
+.result-box.success { border-color:#00c853; }
+.result-box.error { border-color:#ef4444; }
+
+.footer { text-align:center; color:#555; font-size:0.8em; margin-top:32px; }
+.footer a { color:#e94560; text-decoration:none; }
+
+/* Optional upload checkbox */
+.upload-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  cursor: pointer;
+}
+.upload-toggle input[type=checkbox] {
+  width: auto;
+  accent-color: #e94560;
+}
+.upload-toggle span {
+  font-size: 0.85em;
+  color: #aaa;
+}
+
+.toggle-area { display: none; }
+.toggle-area.show { display: block; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>kunxun.top</h1>
+  <div class="sub">轻量创建角色 · 无需打包</div>
+  
+  <div class="bandwidth-notice" id="bandwidthInfo">
+    <span class="icon">📶</span>
+    <span>正在检测服务器带宽...</span>
+  </div>
+  
+  <div class="card">
+    <h2>✨ 创建新角色</h2>
+    
+    <label>角色名称 *</label>
+    <input type="text" id="roleName" maxlength="64" placeholder="例如：绪山真寻、初音未来...">
+    
+    <label>作者（可选）</label>
+    <input type="text" id="roleAuthor" maxlength="64" placeholder="你的名称或昵称">
+    
+    <label>简介（可选）</label>
+    <textarea id="roleDesc" maxlength="256" placeholder="简单描述一下这个角色的特点..."></textarea>
+    
+    <label class="upload-toggle">
+      <input type="checkbox" id="enableUpload" onchange="toggleUpload()">
+      <span>📎 顺便上传一个文件（50MB以下）</span>
+    </label>
+    
+    <div class="toggle-area" id="uploadArea">
+      <div class="file-section">
+        <label>选择文件</label>
+        <input type="file" id="fileInput" disabled>
+        <div class="hint" id="fileInfo">支持图片(jpg/png/gif/webp)、音频(mp3/wav/ogg)、ZIP压缩包</div>
+        <div class="hint" id="uploadSizeInfo"></div>
+      </div>
+    </div>
+    
+    <button class="btn" id="submitBtn" onclick="createRole()">🚀 创建角色</button>
+    <div id="result" class="result-box"></div>
+  </div>
+  
+  <div class="card" style="text-align:center;padding:16px">
+    <div style="font-size:0.85em;color:#888">
+      💡 创建后需管理员审核，审核通过后即可上传更多文件
+    </div>
+  </div>
+  
+  <div class="footer">
+    <a href="/">← 返回首页</a> · <a href="/upload">📤 上传文件</a><br>
+    kunxun.top v2.0
+  </div>
+</div>
+
+<script>
+let serverInfo = {};
+
+// 加载服务器信息
+async function loadServerInfo() {
+  try {
+    const res = await fetch('/api/server/info');
+    serverInfo = await res.json();
+    const maxMbs = serverInfo.bandwidth_mbs;
+    const bwMsg = maxMbs < 5
+      ? `当前服务器带宽约 ${maxMbs}MB/s，上传大文件可能需要较长时间`
+      : `当前服务器带宽约 ${maxMbs}MB/s，上传流畅`;
+    document.getElementById('bandwidthInfo').innerHTML =
+      `<span class="icon">📶</span><span>${bwMsg}</span>`;
+  } catch(e) {
+    document.getElementById('bandwidthInfo').innerHTML =
+      `<span class="icon">📶</span><span>服务器带宽约 1.2MB/s，超大文件（>50MB）建议通过后台直接上传</span>`;
+  }
+}
+
+function toggleUpload() {
+  const checked = document.getElementById('enableUpload').checked;
+  const area = document.getElementById('uploadArea');
+  const fileInput = document.getElementById('fileInput');
+  area.classList.toggle('show', checked);
+  fileInput.disabled = !checked;
+  if (!checked) {
+    fileInput.value = '';
+    document.getElementById('fileInfo').textContent = '支持图片(jpg/png/gif/webp)、音频(mp3/wav/ogg)、ZIP压缩包';
+    document.getElementById('uploadSizeInfo').textContent = '';
+  }
+}
+
+document.getElementById('fileInput').addEventListener('change', function() {
+  const file = this.files[0];
+  if (!file) {
+    document.getElementById('fileInfo').textContent = '支持图片(jpg/png/gif/webp)、音频(mp3/wav/ogg)、ZIP压缩包';
+    document.getElementById('uploadSizeInfo').textContent = '';
+    return;
+  }
+  const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+  document.getElementById('fileInfo').textContent = `${file.name} (${sizeMB}MB)`;
+  
+  if (file.size > 50 * 1024 * 1024) {
+    document.getElementById('uploadSizeInfo').textContent = '⚠️ 文件超过50MB，建议使用上传页面或后台直接上传';
+    document.getElementById('uploadSizeInfo').style.color = '#ef4444';
+  } else {
+    const estTime = (file.size / 1024 / 1024 / (serverInfo.bandwidth_mbs || 1.2)).toFixed(0);
+    document.getElementById('uploadSizeInfo').textContent = `预计上传时间约 ${estTime} 秒 (带宽 ${serverInfo.bandwidth_mbs || 1.2}MB/s)`;
+    document.getElementById('uploadSizeInfo').style.color = '#888';
+  }
+});
+
+async function createRole() {
+  const btn = document.getElementById('submitBtn');
+  const name = document.getElementById('roleName').value.trim();
+  const resultDiv = document.getElementById('result');
+  
+  if (!name) {
+    showResult('请输入角色名称', 'error');
+    document.getElementById('roleName').focus();
+    return;
+  }
+  
+  btn.disabled = true;
+  btn.textContent = '创建中...';
+  resultDiv.style.display = 'none';
+  
+  try {
+    // Step 1: 创建角色（轻量）
+    const createRes = await fetch('/api/roles/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: name,
+        author: document.getElementById('roleAuthor').value.trim(),
+        desc: document.getElementById('roleDesc').value.trim(),
+      })
+    });
+    const createData = await createRes.json();
+    
+    if (!createRes.ok) {
+      showResult(`❌ ${createData.error || '创建失败'}`, 'error');
+      btn.disabled = false;
+      btn.textContent = '🚀 创建角色';
+      return;
+    }
+    
+    // Step 2: 如果勾选了上传文件
+    const fileInput = document.getElementById('fileInput');
+    if (fileInput.files && fileInput.files[0]) {
+      const file = fileInput.files[0];
+      
+      // 判断文件类型
+      const ext = file.name.split('.').pop().toLowerCase();
+      let uploadUrl = '';
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      if (['mp3','wav','ogg','flac'].includes(ext)) {
+        uploadUrl = `/api/roles/${encodeURIComponent(name)}/audio`;
+        formData.append('category', 'expressions');
+      } else if (['jpg','jpeg','png','gif','webp'].includes(ext)) {
+        uploadUrl = `/api/roles/${encodeURIComponent(name)}/images`;
+      } else if (['zip','rar','7z'].includes(ext)) {
+        uploadUrl = `/api/roles/${encodeURIComponent(name)}/push`;
+      } else {
+        showResult(`✅ 角色 "${name}" 创建成功！但不支持上传该文件格式，请到上传页面处理`, 'success');
+        btn.disabled = false;
+        btn.textContent = '🚀 创建角色';
+        return;
+      }
+      
+      const uploadRes = await fetch(uploadUrl, {
+        method: 'POST',
+        body: formData
+      });
+      const uploadData = await uploadRes.json();
+      
+      if (uploadRes.ok) {
+        showResult(`✅ 角色 "${name}" 创建成功！文件已进入审核队列`, 'success');
+      } else {
+        showResult(`✅ 角色 "${name}" 创建成功！但文件上传失败: ${uploadData.error || '未知错误'}，稍后到上传页重试`, 'success');
+      }
+    } else {
+      showResult(`✅ 角色 "${name}" 创建成功！请等待管理员审核通过`, 'success');
+    }
+    
+    // 清空表单
+    document.getElementById('roleName').value = '';
+    document.getElementById('roleAuthor').value = '';
+    document.getElementById('roleDesc').value = '';
+    document.getElementById('enableUpload').checked = false;
+    toggleUpload();
+    
+  } catch(e) {
+    showResult('❌ 网络错误，请重试', 'error');
+  }
+  
+  btn.disabled = false;
+  btn.textContent = '🚀 创建角色';
+}
+
+function showResult(msg, type) {
+  const el = document.getElementById('result');
+  el.textContent = msg;
+  el.className = 'result-box ' + type;
+  el.style.display = 'block';
+}
+
+loadServerInfo();
+</script>
+</body>
+</html>

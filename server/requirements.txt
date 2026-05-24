@@ -1,2 +1,4 @@
 flask>=2.0.0
 pyyaml>=6.0
+bcrypt>=4.0.0
+pypinyin>=0.47.0
