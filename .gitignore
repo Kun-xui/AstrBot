@@ -13,3 +13,10 @@ data/*/msg_count.json
 data/*/raw_history.json
 data/*/raw_history.json.bak
 data/*/raw_history/
+
+# 服务器运行时数据
+server/config.yaml
+server/devices.json
+server/changelog.json
+server/roles/*.zip
+server/roles/*.json
