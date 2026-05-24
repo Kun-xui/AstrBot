@@ -58,6 +58,29 @@ astrbot_plugin_roleplay/
 | `auto_reply_enabled` | 启用自动回复 | false |
 | `long_term_enabled` | 启用长期记忆 | true |
 
+## QQ命令速查
+
+发送 `/role help` 随时查看。全部命令：
+
+| 命令 | 说明 |
+|------|------|
+| `/role help` | 查看所有命令 |
+| `/role list` | 已安装角色 |
+| `/role switch <名>` | 切换角色 |
+| `/role status` | 当前状态(角色+记忆) |
+| `/role off` | 关闭扮演 |
+| `/role ping` | 服务器连通检测 |
+| `/role preview` | 预览服务器音频/图片 |
+| `/role preview audio` | 仅预览音频 |
+| `/role preview images` | 仅预览图片 |
+| `/role update` | 同步音频+图片(只拉变化的) |
+| `/role update audio\|images` | 仅同步音频/图片 |
+| `/role update status` | 版本对比 |
+| `/role upload audio <路径>` | 上传单个音频 |
+| `/role upload image <文件名>` | 上传单个图片 |
+| `/role push` | 一键打包全部推送 |
+| `/role ttstest` | TTS链路诊断 |
+
 ## 角色 ZIP 格式
 
 ```
