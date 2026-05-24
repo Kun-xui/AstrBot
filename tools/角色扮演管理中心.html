@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Roleplay 管理中心</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,sans-serif;background:#0f0f1a;color:#e0e0e0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+.login-box{background:#1a1a2e;border-radius:16px;padding:36px;max-width:420px;width:90%;text-align:center;display:none}
+.login-box h1{color:#e94560;font-size:22px;margin-bottom:8px}
+.login-box p{color:#888;font-size:13px;margin-bottom:20px}
+.login-box input{width:100%;padding:12px;margin:6px 0;border-radius:8px;border:1px solid #444;background:#0f0f1a;color:#e0e0e0;font-size:14px}
+.login-box input:focus{outline:none;border-color:#e94560}
+.login-box button{width:100%;padding:12px;margin-top:12px;border-radius:8px;background:#e94560;color:#fff;border:none;font-size:15px;font-weight:600;cursor:pointer}
+.login-box .msg{font-size:12px;margin-top:10px;display:none}
+.login-box .msg.err{display:block;color:#ff5252}
+.spin{display:inline-block;width:16px;height:16px;border:2px solid #444;border-top-color:#e94560;border-radius:50%;animation:.6s spin infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.dash{padding:16px}
+.dash .top{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.dash h1{color:#e94560;font-size:18px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+.card{background:#1a1a2e;border-radius:12px;padding:24px;border:1px solid #2a2a4a;text-align:center;transition:.2s;cursor:pointer;text-decoration:none;color:#e0e0e0}
+.card:hover{border-color:#e94560;transform:translateY(-2px)}
+.card .icon{font-size:36px;margin-bottom:8px}
+.card h3{font-size:16px;color:#fff;margin-bottom:4px}
+.card p{font-size:12px;color:#888;line-height:1.4}
+.card.import{border-left:4px solid #e94560}
+.card.export{border-left:4px solid #00c853}
+#status{position:fixed;bottom:20px;right:20px;padding:10px 20px;border-radius:8px;font-size:13px;display:none;z-index:999}
+#status.ok{display:block;background:#00c853;color:#fff}
+#status.err{display:block;background:#ff5252;color:#fff}
+#status.info{display:block;background:#448aff;color:#fff}
+.drop-zone{border:2px dashed #444;border-radius:12px;padding:30px;text-align:center;margin-top:14px;transition:.2s;display:none}
+.drop-zone.active{display:block;border-color:#e94560;background:rgba(233,69,96,.05)}
+#fileInput{display:none}
+</style>
+</head>
+<body>
+<div class="login-box" id="loginBox">
+<h1>🎭 Roleplay 管理中心</h1>
+<p>输入 AstrBot WebUI 地址和密码</p>
+<input type="text" id="baseUrl" placeholder="http://localhost:6185" value="http://localhost:6185">
+<input type="password" id="password" placeholder="密码">
+<button onclick="doLogin()">🔑 登录</button>
+<div class="msg" id="loginMsg"></div>
+</div>
+
+<div class="dash" id="dash" style="display:none">
+<div class="top"><h1>🎭 Roleplay — 管理中心</h1><button class="card" style="width:auto;padding:8px 16px;font-size:12px" onclick="logout()">退出</button></div>
+<div class="cards">
+<div class="card import" onclick="document.getElementById('fileInput').click()">
+<div class="icon">📥</div><h3>导入角色 ZIP</h3><p>点击或拖拽上传并安装</p>
+<div class="drop-zone" id="dropzone"><div style="font-size:28px">📂</div><p style="font-size:12px;color:#666">拖拽 ZIP 到此处</p></div>
+<input type="file" id="fileInput" accept=".zip">
+</div>
+<a class="card" href="#" onclick="openPage('roleplay/dashboard');return false">
+<div class="icon">🏠</div><h3>完整管理中心</h3><p>所有角色、服务器、自动回复</p>
+</a>
+<a class="card" href="#" onclick="openPage('roleplay/export_page');return false">
+<div class="icon">📦</div><h3>导出角色 ZIP</h3><p>卡片式选择 + 隐私清洗</p>
+</a>
+<a class="card" href="#" onclick="openPage('roleplay/special_dates');return false">
+<div class="icon">📅</div><h3>特殊日期</h3><p>可视化编辑器，每行一条</p>
+</a>
+<a class="card" href="#" onclick="openPage('roleplay/shop');return false">
+<div class="icon">🛒</div><h3>角色商店</h3><p>从可信任服务器浏览/下载</p>
+</a>
+<a class="card" href="#" onclick="openPage('roleplay/memory_view');return false">
+<div class="icon">🧠</div><h3>记忆管理</h3><p>原始记录 + 记忆数据</p>
+</a>
+</div>
+<div id="status"></div>
+</div>
+
+<script>
+var BASE = '';
+var TOKEN = '';
+
+function msg(t, c) { var e = document.getElementById('status'); e.textContent = t; e.className = c; setTimeout(function(){ e.className = ''; }, 3000); }
+
+async function doLogin() {
+var base = document.getElementById('baseUrl').value.trim().replace(/\/+$/, '');
+var pw = document.getElementById('password').value;
+if (!base || !pw) { document.getElementById('loginMsg').textContent = '请填写地址和密码'; document.getElementById('loginMsg').className = 'msg err'; return; }
+BASE = base;
+try {
+var r = await fetch(base + '/api/auth/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'astrbot',password:pw})});
+var d = await r.json();
+if (d.status !== 'ok') { document.getElementById('loginMsg').textContent = d.message||'登录失败'; document.getElementById('loginMsg').className = 'msg err'; return; }
+TOKEN = d.data.token;
+document.getElementById('loginBox').style.display = 'none';
+document.getElementById('dash').style.display = 'block';
+msg('✅ 已连接 ' + base, 'ok');
+} catch(e) { document.getElementById('loginMsg').textContent = '连接失败: ' + e.message; document.getElementById('loginMsg').className = 'msg err'; }
+}
+
+function openPage(path) {
+if (!BASE || !TOKEN) return;
+var win = window.open('about:blank', '_blank');
+fetch(BASE + '/api/plug/' + path, {headers:{'Authorization':'Bearer '+TOKEN}})
+.then(function(r){ return r.text(); })
+.then(function(html){
+win.document.open();
+win.document.write(html);
+win.document.close();
+})
+.catch(function(e){ msg('加载失败: ' + e.message, 'err'); });
+}
+
+function logout() { TOKEN = ''; document.getElementById('loginBox').style.display = 'block'; document.getElementById('dash').style.display = 'none'; }
+
+var drop = document.getElementById('dropzone');
+var fileInp = document.getElementById('fileInput');
+['dragenter','dragover'].forEach(function(ev){ document.addEventListener(ev,function(e){ e.preventDefault(); drop.classList.add('active'); }); });
+document.addEventListener('dragleave',function(e){ if(!e.relatedTarget||e.relatedTarget===document.documentElement){ drop.classList.remove('active'); } });
+document.addEventListener('drop',function(e){ e.preventDefault(); drop.classList.remove('active'); if(e.dataTransfer.files.length){ uploadFile(e.dataTransfer.files[0]); } });
+fileInp.addEventListener('change',function(){ if(fileInp.files.length){ uploadFile(fileInp.files[0]); } });
+
+async function uploadFile(f) {
+if (!f.name.endsWith('.zip')) { msg('只支持 .zip 文件', 'err'); return; }
+msg('正在上传...', 'info');
+var fd = new FormData(); fd.append('file', f);
+try {
+var r = await fetch(BASE + '/api/plug/roleplay/upload', {method:'POST',headers:{'Authorization':'Bearer '+TOKEN},body:fd});
+var d = await r.json();
+if (d.ok) { msg('✅ ' + d.msg, 'ok'); setTimeout(function(){ location.reload(); }, 1500); }
+else { msg('❌ ' + (d.msg||'安装失败'), 'err'); }
+} catch(e) { msg('❌ ' + e.message, 'err'); }
+fileInp.value = ''; drop.classList.remove('active');
+}
+</script>
+</body>
+</html>

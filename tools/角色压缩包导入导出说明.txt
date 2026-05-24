@@ -1,0 +1,141 @@
+╔══════════════════════════════════════════════════════════╗
+║     🎭 Roleplay 角色压缩包 — 导入 & 导出 完全指南       ║
+╚══════════════════════════════════════════════════════════╝
+
+本插件只认 ZIP 格式。一个合法的角色 ZIP 内部结构如下：
+
+    📦 绪山真寻.zip
+    ├── config.yaml          ← 必需！角色配置（名字、性格、语音等）
+    ├── audio/               ← 可选：语气词音频
+    │   ├── audio_map.json
+    │   └── expressions/
+    └── images/              ← 可选：角色图片
+
+
+═══════════════════════════════════════════
+  一、📥 导入角色 (ZIP → Bot)
+═══════════════════════════════════════════
+
+【方式A】批处理一键导入（推荐）
+
+    1. 把要导入的 *.zip 文件放到这个文件夹：
+       C:\Users\Administrator\AstrBot\待导入角色\
+
+    2. 双击运行 导入角色.bat   (桌面也有快捷方式)
+
+    3. 重启 AstrBot，新角色自动生效
+
+
+【方式B】手动复制
+
+    1. 用解压软件把 ZIP 解压到：
+       C:\Users\Administrator\AstrBot\source\data\plugins\astrbot_plugin_roleplay\data\roles\
+
+    2. 目录结构变成：
+       data\roles\
+       ├── 绪山真寻\
+       │   ├── config.yaml
+       │   ├── audio\
+       │   └── images\
+       └── 新角色名\
+           └── config.yaml
+
+    3. 重启 AstrBot
+
+
+【方式C】WebUI 上传（需要先登录 http://localhost:6185）
+
+    1. 浏览器打开桌面文件：角色扮演管理中心.html
+    2. 登录后点击「📥 导入角色 ZIP」
+    3. 选择或拖拽 .zip 文件 → 自动安装
+
+
+═══════════════════════════════════════════
+  二、📤 导出角色 (Bot → ZIP)
+═══════════════════════════════════════════
+
+【方式A】批处理一键导出
+
+    1. 双击运行 导出角色.bat   (桌面也有快捷方式)
+
+    2. 输入要导出的角色名，回车
+
+    3. ZIP 文件生成到桌面
+
+
+【方式B】手动打包
+
+    1. 用压缩软件把角色文件夹直接打包：
+       C:\Users\Administrator\AstrBot\source\data\plugins\astrbot_plugin_roleplay\data\roles\绪山真寻\
+
+    2. 保存为 *.zip 即可分享
+
+
+【方式C】WebUI 导出（带隐私清洗，推荐分享用）
+
+    1. 浏览器打开桌面文件：角色扮演管理中心.html
+    2. 登录后点击「📦 导出角色 ZIP」
+    3. 勾选「隐私清洗」→ 点角色卡片的「下载ZIP」
+       （清洗后自动移除使用者生日/用户名等信息）
+
+
+═══════════════════════════════════════════
+  三、📍 关键文件路径
+═══════════════════════════════════════════
+
+  插件目录：
+    C:\Users\Administrator\AstrBot\source\data\plugins\astrbot_plugin_roleplay\
+
+  角色存放目录：
+    data\roles\<角色名>\
+
+  角色配置文件示例：
+    data\roles\绪山真寻\config.yaml
+
+  音频文件目录：
+    data\roles\绪山真寻\audio\expressions\
+
+  音频映射配置：
+    data\roles\绪山真寻\audio\audio_map.json
+
+  插件配置：
+    C:\Users\Administrator\AstrBot\source\data\config\astrbot_plugin_roleplay_config.json
+
+
+═══════════════════════════════════════════
+  四、🔧 config.yaml 最小模板
+═══════════════════════════════════════════
+
+  name: 角色名
+  version: 1.0.0
+  author: 你的名字
+  birthday: MM-DD
+  birthday_desc: 角色生日说明
+  persona: |
+    你是xxx，来自xxx作品。
+    你的性格是...
+    你的说话风格...
+  emotions:
+    default:
+      triggers: []
+      prompt: 平静状态
+    happy:
+      triggers: [开心, 高兴, 游戏]
+      prompt: 开心的状态
+      image: images/xxx.png
+  voice:
+    engine: gpt_sovits          # gpt_sovits / edge_tts / disabled
+  reply_style:
+    prefer: [text, image]
+    allow_emoji: false
+
+
+═══════════════════════════════════════════
+  五、🔥 快速工作流
+═══════════════════════════════════════════
+
+  别人分享给你 → 下载 ZIP → 放到「待导入角色」文件夹 → 双击「导入角色.bat」→ 重启Bot
+
+  你要分享给别人 → 双击「导出角色.bat」→ 输入角色名 → ZIP 出现在桌面 → 发给他
+
+  你要用 WebUI 深入管理 → 双击桌面「角色扮演管理中心.html」→ 登录 → 随便操作

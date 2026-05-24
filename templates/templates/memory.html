@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>记忆管理器</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:system-ui,-apple-system,sans-serif;background:#1a1a2e;color:#e0e0e0;min-height:100vh;padding:24px}
+.container{max-width:900px;margin:0 auto}
+.topnav{display:flex;gap:8px;margin-bottom:16px}
+.topnav a{color:#888;text-decoration:none;font-size:13px;padding:6px 12px;border-radius:6px;transition:.2s;border:1px solid #333}
+.topnav a:hover{color:#fff;background:#2a2a4a;border-color:#444}
+h1{font-size:24px;margin-bottom:8px;color:#e94560}
+h2{font-size:18px;margin-bottom:12px;color:#ccc;border-bottom:1px solid #333;padding-bottom:8px}
+.card{background:#16213e;border-radius:12px;padding:24px;margin-bottom:20px;box-shadow:0 4px 16px rgba(0,0,0,.2)}
+.mem-item{padding:8px 12px;background:rgba(255,255,255,.03);border-radius:6px;margin-bottom:6px;font-size:13px;word-break:break-all}
+.mem-item .sender{color:#e94560;margin-right:8px}
+.mem-item .time{color:#555;font-size:11px;margin-left:8px}
+.controls{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
+.btn{padding:8px 16px;border-radius:6px;border:none;cursor:pointer;font-size:13px;transition:.2s}
+.btn-danger{background:rgba(255,82,82,.2);color:#ff5252}
+.btn-danger:hover{background:rgba(255,82,82,.3)}
+.btn-ok{background:rgba(0,200,83,.2);color:#00c853}
+.btn-ok:hover{background:rgba(0,200,83,.3)}
+.btn-info{background:rgba(33,150,243,.2);color:#2196f3}
+.btn-info:hover{background:rgba(33,150,243,.3)}
+.empty{padding:32px;text-align:center;color:#666;font-size:14px}
+.loading{text-align:center;color:#888;padding:24px}
+#info{color:#888;font-size:13px;margin-bottom:16px}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="topnav">
+<a href="/api/plug/roleplay/dashboard">🏠 管理中心</a>
+<a href="/api/plug/roleplay/export_page">📦 导出角色</a>
+<a href="/api/plug/roleplay/shop">🛒 角色商店</a>
+</div>
+<h1>角色扮演 — 记忆管理器</h1>
+<div id="info">加载中...</div>
+
+<div class="card"><h2>📝 原始聊天记录 <span style="font-size:12px;color:#888;font-weight:400">（永久归档，不会自动删除）</span></h2><div id="rawHistory"><div class="loading">加载中...</div></div><div class="controls"><button class="btn btn-danger" onclick="clearRawHistory()">清除原始记录</button></div></div>
+
+<div class="card"><h2>💬 短期记忆 (上下文窗口)</h2><div id="shortMem"><div class="loading">加载中...</div></div><div class="controls"><button class="btn btn-danger" onclick="clearMem('short')">清除短期记忆</button></div></div>
+
+<div class="card"><h2>📋 中期摘要</h2><div id="mediumMem"><div class="loading">加载中...</div></div><div class="controls"><button class="btn btn-danger" onclick="clearMem('medium')">清除中期摘要</button></div></div>
+
+<div class="card"><h2>🧠 长期事实</h2><div id="longMem"><div class="loading">加载中...</div></div><div class="controls"><button class="btn btn-danger" onclick="clearMem('long')">清除长期事实</button> <button class="btn btn-danger" onclick="clearMem('all')">清除全部记忆</button></div></div>
+
+<div class="controls" style="justify-content:center"><button class="btn btn-info" onclick="loadAll()">刷新</button></div>
+</div>
+
+<script>
+function ts(t) { return new Date(t*1000).toLocaleString('zh-CN'); }
+
+async function loadAll() {
+try {
+var r1 = await fetch('/api/plug/roleplay/memory');
+var d = await r1.json();
+if (!d.ok) { document.getElementById('info').textContent = '获取记忆失败'; }
+else {
+document.getElementById('info').textContent = '角色: '+d.role+' | 短期:'+d.memory.short_term_count+'条 | 中期:'+d.memory.medium_summary_count+'份 | 长期:'+d.memory.long_term_fact_count+'条 | 原始:'+(d.memory.raw_history_count||0)+'条';
+renderShort(d.memory.short_term);
+renderMedium(d.memory.medium_summaries);
+renderLong(d.memory.long_term_facts);
+}
+
+var r2 = await fetch('/api/plug/roleplay/history');
+var h = await r2.json();
+if (h.ok) renderRaw(h.messages||[]);
+else document.getElementById('rawHistory').innerHTML = '<div class="empty">加载失败</div>';
+} catch(e) { document.getElementById('info').textContent = '加载失败: '+e.message; }
+}
+
+function renderShort(list) {
+var el = document.getElementById('shortMem');
+if (!list||!list.length) { el.innerHTML='<div class="empty">暂无短期记忆</div>'; return; }
+el.innerHTML = list.map(function(m){return '<div class="mem-item"><span class="sender">'+m.sender+':</span>'+m.content+'<span class="time">'+ts(m.time)+'</span></div>'}).join('');
+}
+
+function renderMedium(list) {
+var el = document.getElementById('mediumMem');
+if (!list||!list.length) { el.innerHTML='<div class="empty">暂无中期摘要</div>'; return; }
+el.innerHTML = list.map(function(s,i){return '<div class="mem-item">'+s+'</div>'}).join('');
+}
+
+function renderLong(list) {
+var el = document.getElementById('longMem');
+if (!list||!list.length) { el.innerHTML='<div class="empty">暂无长期事实</div>'; return; }
+el.innerHTML = list.map(function(s,i){return '<div class="mem-item">'+s+'</div>'}).join('');
+}
+
+function renderRaw(list) {
+var el = document.getElementById('rawHistory');
+if (!list||!list.length) { el.innerHTML='<div class="empty">暂无原始记录</div>'; return; }
+el.innerHTML = list.map(function(m){return '<div class="mem-item"><span class="sender">'+m.sender+':</span>'+m.content+'<span class="time">'+ts(m.time)+'</span></div>'}).join('');
+}
+
+async function clearMem(target) {
+if (!confirm('确认清除 '+target+' 记忆？')) return;
+var r = await fetch('/api/plug/roleplay/memory/clear',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target:target})});
+var d = await r.json();
+if (d.ok) loadAll(); else alert(d.msg);
+}
+
+async function clearRawHistory() {
+if (!confirm('确认清除所有原始聊天记录？此操作不可撤销。')) return;
+var r = await fetch('/api/plug/roleplay/history/clear',{method:'POST'});
+var d = await r.json();
+if (d.ok) loadAll(); else alert(d.msg);
+}
+
+loadAll();
+</script>
+</body>
+</html>

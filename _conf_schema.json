@@ -1,0 +1,221 @@
+{
+  "█ 可视化工具 (浏览器打开)": {
+    "type": "object",
+    "description": "导入/导出/特殊日期/记忆管理 — 点击下方链接",
+    "hint": "导出ZIP:    http://localhost:6185/api/plug/roleplay/export_page\n特殊日期:  http://localhost:6185/api/plug/roleplay/special_dates\n角色商店:  http://localhost:6185/api/plug/roleplay/shop\n管理中心:  http://localhost:6185/api/plug/roleplay/dashboard\n记忆管理:  http://localhost:6185/api/plug/roleplay/memory_view\n上传角色:  http://localhost:6185/api/plug/roleplay/upload",
+    "items": {},
+    "obvious_hint": true
+  },
+  "enabled": {
+    "type": "bool",
+    "description": "启用插件",
+    "hint": "开启/关闭角色扮演功能",
+    "default": true
+  },
+  "active_role": {
+    "type": "string",
+    "description": "当前激活角色名",
+    "hint": "输入角色名切换，如: 绪山真寻",
+    "default": ""
+  },
+  "trusted_server_url": {
+    "type": "string",
+    "description": "可信任服务器地址",
+    "hint": "填写后可浏览/下载远程角色，如 https://kunxun.top",
+    "default": ""
+  },
+  "trusted_server_token": {
+    "type": "string",
+    "description": "服务器 Token",
+    "hint": "选填",
+    "default": ""
+  },
+  "█ TTS 语音引擎": {
+    "type": "object",
+    "description": "文字转语音配置",
+    "hint": "",
+    "items": {},
+    "invisible": true
+  },
+  "tts_engine": {
+    "type": "string",
+    "description": "TTS 语音引擎",
+    "hint": "gpt_sovits / edge_tts / cloud_api / disabled",
+    "options": ["gpt_sovits", "edge_tts", "cloud_api", "disabled"],
+    "default": "disabled"
+  },
+  "tts_gpt_sovits_url": {
+    "type": "string",
+    "description": "GPT-SoVITS API 地址",
+    "hint": "本地语音服务地址",
+    "default": "http://127.0.0.1:9880"
+  },
+  "tts_cloud_api_url": {
+    "type": "string",
+    "description": "云端 TTS API 地址",
+    "hint": "第三方云端语音服务",
+    "default": ""
+  },
+  "tts_cloud_api_key": {
+    "type": "string",
+    "description": "云端 TTS API 密钥",
+    "hint": "API Key",
+    "default": ""
+  },
+  "tts_edge_voice": {
+    "type": "string",
+    "description": "Edge TTS 语音角色",
+    "hint": "如 zh-CN-XiaoxiaoNeural",
+    "default": "zh-CN-XiaoxiaoNeural"
+  },
+  "tts_launch_script": {
+    "type": "string",
+    "description": "GPT-SoVITS 启动脚本路径",
+    "hint": "Bot 启动时自动拉起语音服务",
+    "default": ""
+  },
+  "█ 记忆系统": {
+    "type": "object",
+    "description": "对话记忆配置",
+    "hint": "",
+    "items": {},
+    "invisible": true
+  },
+  "short_term_size": {
+    "type": "int",
+    "description": "短期记忆条数",
+    "hint": "保留最近 N 条对话给 LLM 参考",
+    "default": 10
+  },
+  "medium_summary_interval": {
+    "type": "int",
+    "description": "中期摘要间隔",
+    "hint": "每 N 条对话生成一次摘要",
+    "default": 20
+  },
+  "long_term_enabled": {
+    "type": "bool",
+    "description": "启用长期记忆",
+    "hint": "自动提取用户偏好和事实",
+    "default": true
+  },
+  "█ 表现控制": {
+    "type": "object",
+    "description": "图片/语音/频道的表现配置",
+    "hint": "",
+    "items": {},
+    "invisible": true
+  },
+  "allow_emoji": {
+    "type": "bool",
+    "description": "允许 Emoji",
+    "hint": "是否允许角色使用 Emoji 表情",
+    "default": true
+  },
+  "image_strategy": {
+    "type": "string",
+    "description": "图片策略",
+    "hint": "auto / emotion_only / disabled",
+    "options": ["auto", "emotion_only", "disabled"],
+    "default": "auto"
+  },
+  "image_frequency": {
+    "type": "int",
+    "description": "图片出现概率(%)",
+    "hint": "0-100",
+    "default": 80
+  },
+  "voice_frequency": {
+    "type": "int",
+    "description": "语音出现概率(%)",
+    "hint": "0-100",
+    "default": 50
+  },
+  "role_channels": {
+    "type": "text",
+    "description": "限定频道",
+    "hint": "每行一个会话ID，留空则所有频道生效",
+    "default": ""
+  },
+  "█ 自动回复": {
+    "type": "object",
+    "description": "角色自动回复/特殊日期（可视化编辑器见上方链接）",
+    "hint": "",
+    "items": {},
+    "invisible": true
+  },
+  "auto_reply_enabled": {
+    "type": "bool",
+    "description": "启用自动回复",
+    "hint": "角色会在随机时间或特殊日子主动发消息",
+    "default": false
+  },
+  "auto_reply_min_interval": {
+    "type": "int",
+    "description": "自动回复最小间隔(分钟)",
+    "hint": "两次随机回复之间的最短间隔",
+    "default": 60
+  },
+  "auto_reply_max_interval": {
+    "type": "int",
+    "description": "自动回复最大间隔(分钟)",
+    "hint": "两次随机回复之间的最长间隔",
+    "default": 180
+  },
+  "auto_reply_cooldown": {
+    "type": "int",
+    "description": "自动回复冷却时间(分钟)",
+    "hint": "无论什么原因触发，两次回复最少间隔",
+    "default": 30
+  },
+  "auto_reply_channel": {
+    "type": "string",
+    "description": "自动回复发送频道",
+    "hint": "会话ID，留空则使用限定频道第一条",
+    "default": ""
+  },
+  "special_dates": {
+    "type": "text",
+    "description": "特殊日期(JSON数组)",
+    "hint": "格式: [{\"date\":\"MM-DD\",\"name\":\"名称\",\"reason\":\"说明\"}]\n\n** 强烈推荐使用可视化编辑器代替手工编辑 **\n→ 浏览器打开: http://localhost:6185/api/plug/roleplay/special_dates\n→ 每行一条: MM-DD | 名称 | 说明\n→ 编辑后点保存即可同步到此配置",
+    "default": "[]",
+    "obvious_hint": true
+  },
+  "user_name": {
+    "type": "string",
+    "description": "使用者称呼",
+    "hint": "体验模式下使用，导出时自动过滤，不会泄露",
+    "default": ""
+  },
+  "user_birthday": {
+    "type": "string",
+    "description": "使用者生日(MM-DD)",
+    "hint": "导出时自动过滤，不会泄露",
+    "default": ""
+  },
+  "█ 知识库": {
+    "type": "object",
+    "description": "角色背景知识自动更新",
+    "hint": "",
+    "items": {},
+    "invisible": true
+  },
+  "knowledge_update_enabled": {
+    "type": "bool",
+    "description": "启用知识库自动更新",
+    "hint": "定时联网搜索更新角色背景知识",
+    "default": false
+  },
+  "knowledge_search_topics": {
+    "type": "text",
+    "description": "搜索主题(每行一个)",
+    "hint": "用于联网搜索更新知识库的关键词",
+    "default": ""
+  },
+  "knowledge_update_interval": {
+    "type": "int",
+    "description": "知识库更新间隔(小时)",
+    "hint": "每N小时执行一次搜索更新",
+    "default": 24
+  }
+}
