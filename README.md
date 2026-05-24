@@ -118,6 +118,66 @@ rm, del, format, shutdown, reboot, kill, dd, mkfs, chmod,
 chown, sudo, su, $(...), ${...}, >/dev/*, >/etc/*, | sh, | bash
 ```
 
+## 角色分享服务器
+
+插件支持连接可信任服务器，实现社区共创：
+
+```
+用户A ──上传角色+音频──→  角色分享服务器  ←──下载+同步── 用户B
+         (Flask + SQLite)    (端口 8766)
+```
+
+### 服务器部署
+
+```bash
+cd server/
+pip install flask pyyaml bcrypt
+copy config.example.yaml config.yaml
+python server.py
+# → http://你的IP:8766  管理后台 → http://你的IP:8766/admin
+```
+
+### 隐私保证
+
+| 数据 | 是否传到服务器 | 说明 |
+|------|---------------|------|
+| 角色 ZIP (config + audio + images) | ✅ 用户主动上传 | 社区共享，管理员审核 |
+| 音频/图片文件 | ✅ 用户主动上传 | 热更新的资源 |
+| 聊天记录 (raw_history/) | ❌ 绝不触碰 | 纯本地存储 |
+| 用户事实 (user_facts.json) | ❌ 绝不触碰 | 纯本地存储 |
+| 使用者生日/用户名 | ❌ 绝不触碰 | 导出时自动清洗 |
+| 设备指纹 (X-Device-ID) | ✅ 自动 | 只用于识别设备，无法反推个人信息 |
+
+**服务器不保存任何用户对话数据。** 插件与服务器的通信仅限于角色资源的上传/下载。
+
+### 客户端命令
+
+在 QQ 中向 Bot 发送：
+
+| 命令 | 作用 |
+|------|------|
+| `/role ping` | 测试服务器连通性 |
+| `/role update` | 从服务器同步音频/图片（只下载变化的） |
+| `/role update audio` | 仅同步音频 |
+| `/role update images` | 仅同步图片 |
+| `/role update status` | 本地与远程版本对比 |
+
+### 服务器API
+
+详见 `server/README.md`，核心端点：
+
+| 路由 | 说明 |
+|------|------|
+| `GET /api/ping` | 连通性检测 |
+| `GET /api/roles` | 角色列表 |
+| `GET /api/roles/{name}/audio` | 音频文件列表 |
+| `GET /api/roles/{name}/audio/{cat}/{file}` | 下载音频 |
+| `POST /api/roles/{name}/audio` | 上传音频 |
+| `POST /api/roles/share` | 分享角色（审核模式进 pending） |
+| `POST /api/admin/login` | 管理员登录（bcrypt） |
+
+---
+
 ## 依赖
 
 ```
@@ -126,7 +186,3 @@ pyyaml>=6.0
 ```
 
 > `aiohttp` 是 weather/web_search 工具的必要依赖，如不需要可忽略。
-
-## 本地工具入口
-
-浏览器打开 `tools\角色扮演管理中心.html` 可直接登录 AstrBot 并跳转到各个管理页面，适合在没有认证 cookie 的桌面环境下使用。
