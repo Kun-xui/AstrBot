@@ -23,6 +23,7 @@ from .core.auto_reply import AutoReplyScheduler
 from .core.knowledge_updater import KnowledgeUpdater
 from .core.audio_injector import AudioInjector
 from .core import function_tools
+from .core.device_fingerprint import generate_device_id, get_device_name
 
 
 PLUGIN_DATA_DIR = "data"
@@ -103,6 +104,11 @@ class RoleplayPlugin(Star):
         self._active_role = self._config.get("active_role", "")
         self._trusted_server_url = self._config.get("trusted_server_url", "")
         self._trusted_server_token = self._config.get("trusted_server_token", "")
+
+        if self._trusted_server_url and not hasattr(self, "_device_id"):
+            self._device_id = generate_device_id()
+            self._device_name = get_device_name()
+            logger.info(f"[Device] 设备ID: {self._device_id[:16]}..., 名称: {self._device_name}")
 
         self.tts_manager.configure(
             engine=self._config.get("tts_engine", "edge_tts"),
@@ -878,9 +884,7 @@ class RoleplayPlugin(Star):
             files_to_sync = data.get("files", [])
             role_dir = self._role_config.get("_role_dir", "")
             import aiohttp
-            headers = {}
-            if self._trusted_server_token:
-                headers["Authorization"] = f"Bearer {self._trusted_server_token}"
+            headers = self._server_auth_headers(self._trusted_server_token)
             synced = 0
             failed = 0
             url_base = self._trusted_server_url.rstrip("/")
@@ -943,9 +947,7 @@ class RoleplayPlugin(Star):
             return self._json_response({"ok": False, "msg": "缺少角色名"}, 400)
         try:
             import aiohttp
-            headers = {}
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
+            headers = self._server_auth_headers(token)
             api_url = f"{url.rstrip('/')}/api/roles/{role_name}/audio"
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -956,6 +958,15 @@ class RoleplayPlugin(Star):
         except Exception as e:
             logger.error(f"获取服务器音频列表失败: {e}")
             return self._json_response({"ok": False, "msg": f"连接服务器失败: {e}"}, 502)
+
+    def _server_auth_headers(self, token: str = "") -> dict:
+        headers = {}
+        device_id = getattr(self, "_device_id", "")
+        if device_id:
+            headers["X-Device-ID"] = device_id
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        return headers
 
     async def _web_export_page(self):
         from quart import Response
@@ -969,9 +980,7 @@ class RoleplayPlugin(Star):
             return self._json_response({"ok": False, "msg": "未配置可信任服务器地址"}, 400)
         try:
             import aiohttp
-            headers = {}
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
+            headers = self._server_auth_headers(token)
             api_url = f"{url.rstrip('/')}/api/roles"
             async with aiohttp.ClientSession() as session:
                 async with session.get(api_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
@@ -998,9 +1007,7 @@ class RoleplayPlugin(Star):
             download_url = f"{url.rstrip('/')}/api/roles/{role_name}/download"
         import aiohttp
         import tempfile
-        headers = {}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+        headers = self._server_auth_headers(token)
         tmp_path = os.path.join(tempfile.gettempdir(), f"{role_name}.zip")
         try:
             async with aiohttp.ClientSession() as session:
@@ -1044,9 +1051,7 @@ class RoleplayPlugin(Star):
             if not cleaned_zip or not os.path.exists(cleaned_zip):
                 return self._json_response({"ok": False, "msg": "清洗导出失败"}, 500)
             import aiohttp
-            headers = {}
-            if self._trusted_server_token:
-                headers["Authorization"] = f"Bearer {self._trusted_server_token}"
+            headers = self._server_auth_headers(self._trusted_server_token)
             share_url = f"{url.rstrip('/')}/api/roles/share"
             async with aiohttp.ClientSession() as session:
                 with open(cleaned_zip, "rb") as f:
@@ -1370,6 +1375,157 @@ class RoleplayPlugin(Star):
             yield event.plain_result("Step3 语音合成: ❌ 超时(60s)")
         except Exception as e:
             yield event.plain_result(f"Step3 语音合成: ❌ 异常\n  {e}")
+
+    @role.command("ping")
+    async def role_ping(self, event: AstrMessageEvent):
+        '''测试与可信任服务器的连通性。'''
+        server = self._trusted_server_url
+        if not server:
+            yield event.plain_result("❌ 未配置可信任服务器地址 (trusted_server_url)")
+            return
+        url_base = server.rstrip("/")
+        yield event.plain_result(f"🔍 正在 ping {url_base} ...")
+        import aiohttp
+        from urllib.parse import quote
+        headers = self._server_auth_headers(self._trusted_server_token)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{url_base}/api/ping", headers=headers,
+                                       timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                    ct = resp.headers.get("Content-Type", "")
+                    body = await resp.text()
+                    if "text/html" in ct:
+                        yield event.plain_result(
+                            f"❌ 服务器返回了HTML而不是JSON\n"
+                            f"  状态码: {resp.status}\n"
+                            f"  这通常意味着反向代理(Nginx/Caddy)没有把 /api/ 路径转发到Flask\n"
+                            f"  请检查服务器端的反向代理配置"
+                        )
+                        return
+                    try:
+                        data = await resp.json() if hasattr(resp, 'json') else __import__('json').loads(body)
+                    except Exception:
+                        yield event.plain_result(f"❌ 响应不是JSON\n  Content-Type: {ct}\n  前100字符: {body[:100]}")
+                        return
+                    yield event.plain_result(
+                        f"✅ 服务器连通\n"
+                        f"  地址: {url_base}\n"
+                        f"  状态: {resp.status}\n"
+                        f"  数据: {data}"
+                    )
+        except aiohttp.ClientConnectorError:
+            yield event.plain_result(f"❌ 无法连接到 {url_base} — 服务器未启动或地址错误")
+        except aiohttp.ClientOSError as e:
+            yield event.plain_result(f"❌ 连接错误: {e}")
+        except Exception as e:
+            yield event.plain_result(f"❌ ping 失败: {e}")
+
+    @role.command("update")
+    async def role_update(self, event: AstrMessageEvent, target: str = ""):
+        '''从可信任服务器同步角色资源(音频/图片)。
+        target: ""(全部) / audio / images / status
+        按文件大小对比,只下载变化的。角色名自动URL编码。
+        '''
+        if not self._active_role or not self._role_config:
+            yield event.plain_result("请先激活角色")
+            return
+        server = self._trusted_server_url
+        if not server:
+            yield event.plain_result("未配置可信任服务器地址")
+            return
+        target = target.strip().lower()
+        url_base = server.rstrip("/")
+        role = self._active_role
+        yield event.plain_result(f"🔍 连接 {url_base}\n   角色: {role}\n   范围: {target or '全部'}")
+        import aiohttp
+        from urllib.parse import quote
+        headers = self._server_auth_headers(self._trusted_server_token)
+        role_encoded = quote(role, safe="")
+        try:
+            async with aiohttp.ClientSession() as session:
+                audio_url = f"{url_base}/api/roles/{role_encoded}/audio"
+                async with session.get(audio_url, headers=headers,
+                                       timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    ct = resp.headers.get("Content-Type", "")
+                    if "text/html" in ct:
+                        yield event.plain_result(
+                            f"❌ 服务器返回HTML — 反向代理可能未配置 /api/ 路由\n"
+                            f"  请确保 Nginx/Caddy 将 /api/* 代理到 Flask(端口8766)"
+                        )
+                        return
+                    if resp.status != 200:
+                        body = await resp.text()
+                        yield event.plain_result(f"❌ 服务器返回 {resp.status}\n  {body[:200]}")
+                        return
+                    audio_info = await resp.json()
+                if not audio_info.get("ok"):
+                    yield event.plain_result(f"❌ 服务器: {audio_info.get('msg','未知错误')}")
+                    return
+                remote_version = audio_info.get("version", "?")
+                expressions = audio_info.get("expressions", [])
+                music = audio_info.get("music", [])
+                total_audio = len(expressions) + len(music)
+            if target == "status":
+                role_dir = self._role_config.get("_role_dir", "")
+                local_audio_dir = os.path.join(role_dir, "audio", "expressions") if role_dir else ""
+                local_audio_cnt = len(os.listdir(local_audio_dir)) if local_audio_dir and os.path.isdir(local_audio_dir) else 0
+                yield event.plain_result(
+                    f"📊 [{role}] 版本对比\n"
+                    f"  本地: v{self._role_config.get('version','?')}  音频{local_audio_cnt}个\n"
+                    f"  远程: v{remote_version}  音频{total_audio}个\n"
+                    f"  服务器: {url_base}"
+                )
+                return
+            role_dir = self._role_config.get("_role_dir", "")
+            if not role_dir or not os.path.isdir(role_dir):
+                yield event.plain_result("❌ 本地角色目录不存在")
+                return
+            to_sync = []
+            if target in ("audio", ""):
+                for item in expressions:
+                    to_sync.append(("audio/expressions", item["name"], item.get("size", 0)))
+                for item in music:
+                    to_sync.append(("audio/music", item["name"], item.get("size", 0)))
+            updated = 0
+            skipped = 0
+            for category, fname, r_size in to_sync:
+                if target == "images" and not category.startswith("images"):
+                    continue
+                local_path = os.path.join(role_dir, category, fname)
+                if os.path.exists(local_path) and os.path.getsize(local_path) == r_size:
+                    skipped += 1
+                    continue
+                cat_dir = category.split("/")[0]
+                subcat = category.split("/")[1] if "/" in category else ""
+                dl_url = f"{url_base}/api/roles/{role_encoded}/{cat_dir}/{subcat}/{quote(fname, safe='')}"
+                async with session.get(dl_url, headers=headers,
+                                       timeout=aiohttp.ClientTimeout(total=15)) as dl_resp:
+                    if dl_resp.status == 200:
+                        data = await dl_resp.read()
+                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                        with open(local_path, "wb") as f:
+                            f.write(data)
+                        updated += 1
+            msg = f"✅ [{role}] 同步完成\n"
+            if target in ("audio", ""):
+                msg += f"音频: 更新{updated} 跳过{skipped}\n"
+            if target in ("images", ""):
+                msg += f"图片: 更新{updated} 跳过{skipped}\n"
+            if updated == 0 and skipped == 0:
+                msg += "远程没有可用的音频/图片资源"
+            yield event.plain_result(msg.strip())
+        except aiohttp.ClientConnectorError:
+            yield event.plain_result(f"❌ 无法连接 {url_base} — 服务器未启动或地址错误")
+        except Exception as e:
+            err_msg = str(e)
+            if "JSON" in err_msg or "json" in err_msg.lower():
+                yield event.plain_result(
+                    f"❌ JSON解析失败 — 服务器返回了非JSON内容\n"
+                    f"  可能原因: 反向代理未将 /api/ 转发到Flask\n"
+                    f"  错误: {err_msg[:150]}"
+                )
+            else:
+                yield event.plain_result(f"❌ 更新失败: {err_msg[:300]}")
 
 
 _UPLOAD_PAGE_HTML = r"""<!DOCTYPE html>

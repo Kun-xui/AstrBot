@@ -1,6 +1,6 @@
 name: astrbot_plugin_roleplay
 desc: 动漫角色扮演插件，支持角色ZIP开箱即用、情感引擎、TTS语音合成、短中长期记忆系统、语气词音频、FunctionCall工具调用、特殊日期自动回复、知识库联网更新、分享前隐私清洗
-version: 1.2.0
+version: 1.2.2
 author: kunxun
 repo: https://github.com/kunxun/astrbot_plugin_roleplay
 support_platforms:
@@ -10,33 +10,36 @@ support_platforms:
   - telegram
   - discord
 help: |
-  角色扮演插件 v1.2.0 使用指南
+  角色扮演插件 v1.2.2 使用指南
   ================
   QQ频道命令：
-    /role list    - 列出已安装角色
+    /role list     - 列出已安装角色
     /role switch <角色名>  - 切换角色
-    /role status  - 查看角色状态
-    /role off     - 关闭角色扮演
-    /role ttstest [文本]   - 测试TTS链路
+    /role status   - 查看角色状态
+    /role off      - 关闭角色扮演
+    /role ping     - 测试可信任服务器连通性
+    /role update   - 从服务器同步音频/图片更新
+    /role update status - 本地与远程版本对比
+    /role update audio  - 仅同步音频
+    /role update images - 仅同步图片
+    /role ttstest [文本] - 测试TTS链路
 
   WebUI 管理页面（端口 6185）：
     /api/plug/roleplay/dashboard      → 插件管理中心
-    /api/plug/roleplay/export_page    → 导出角色（仅含角色知识，不含用户隐私）
+    /api/plug/roleplay/export_page    → 导出角色（仅含角色知识）
     /api/plug/roleplay/shop           → 角色商店
     /api/plug/roleplay/memory_view    → 记忆管理器
     /api/plug/roleplay/upload         → 角色上传
     /api/plug/roleplay/special_dates  → 特殊日期可视化编辑器
 
-  新功能 v1.2.0：
-    🤖 FunctionCall 工具调用 - LLM可主动调用 weather/calculate/web_search/get_time/shell_exec
-      - 善良本性驱动：角色会因为想帮朋友而主动查天气、搜资料
-      - shell_exec 仅白名单命令可用，rm/del/shutdown/kill 等危险命令自动拦截
-      - 角色在系统提示词中看到工具列表，自然选择何时使用
+  新功能 v1.2.2：
+    🤖 FunctionCall 工具调用 - weather/calculate/web_search/get_time/shell_exec
+    🎵 语气词音频命令标签 - [tts]/[audio:害羞]/[music:歌名]
+    🔄 热更新命令 - /role ping/update 从服务器拉音频图片，URL编码+JSON容错
     🧠 记忆系统 v2.0 双通道 - user_facts(永不出) + role_facts(可导出)
-    📂 raw_history 按月分块归档 - 无上限，可二次查询（关键词/发送者/月份）
-    🎵 语气词音频命令标签 - [tts]/[audio:害羞]/[music:歌名]，模型主动触发
-    ⏰ 启动延迟保护 - 自动回复首次触发延迟60-180分钟，避免模型未就绪
+    📂 raw_history 按月分块归档 - 无上限，二次查询
     🔒 导出仅含角色知识 - raw_history/user_facts 永不打包
+    🛡️ 设备指纹认证 - 自动生成，免手动填写Token
 
   v1.1.0 已有功能：
     🎵 语气词音频系统 - 角色目录下 audio/expressions/ 存放MP3
@@ -57,11 +60,11 @@ help: |
     云端 TTS: 填写 API 地址和密钥
     Edge TTS: 选择语音（如 zh-CN-XiaoxiaoNeural）
 
-  可信任服务器 API（需服务器端实现）：
-    GET  /api/roles                       → 角色列表
-    GET  /api/roles/{name}/download       → 下载角色ZIP
-    POST /api/roles/share                 → 分享角色
-    GET  /api/roles/{name}/audio          → 角色音频文件列表
+  可信任服务器 API（需服务器端 Flask 实现，端口8766）：
+    GET  /api/ping                      → 连通性检测
+    GET  /api/roles                     → 角色列表
+    GET  /api/roles/{name}/audio        → 音频文件列表
     GET  /api/roles/{name}/audio/{cat}/{file} → 下载单个音频
+    POST /api/roles/share               → 分享角色(审核模式进pending)
 
   启动顺序：先启动 GPT-SoVITS 语音服务，再启动 AstrBot
