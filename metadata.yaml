@@ -13,11 +13,18 @@ help: |
   角色扮演插件 v1.2.2 使用指南
   ================
   QQ频道命令：
+    /role help    - 查看所有可用命令
     /role list     - 列出已安装角色
     /role switch <角色名>  - 切换角色
     /role status   - 查看角色状态
     /role off      - 关闭角色扮演
     /role ping     - 测试可信任服务器连通性
+    /role preview  - 预览服务器音频/图片列表(不下载)
+    /role preview audio   - 仅预览音频
+    /role preview images  - 仅预览图片
+    /role push    - 一键打包音频+图片推送至服务器(进入审核)
+    /role upload audio <路径>  - 上传单个音频
+    /role upload image <文件名> - 上传本地图片到服务器
     /role update   - 从服务器同步音频/图片更新
     /role update status - 本地与远程版本对比
     /role update audio  - 仅同步音频
@@ -35,7 +42,7 @@ help: |
   新功能 v1.2.2：
     🤖 FunctionCall 工具调用 - weather/calculate/web_search/get_time/shell_exec
     🎵 语气词音频命令标签 - [tts]/[audio:害羞]/[music:歌名]
-    🔄 热更新命令 - /role ping/update 从服务器拉音频图片，URL编码+JSON容错
+    🔄 热更新命令 - /role preview/upload/update 预览+上传+同步音频图片
     🧠 记忆系统 v2.0 双通道 - user_facts(永不出) + role_facts(可导出)
     📂 raw_history 按月分块归档 - 无上限，二次查询
     🔒 导出仅含角色知识 - raw_history/user_facts 永不打包

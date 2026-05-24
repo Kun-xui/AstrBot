@@ -1376,6 +1376,30 @@ class RoleplayPlugin(Star):
         except Exception as e:
             yield event.plain_result(f"Step3 语音合成: ❌ 异常\n  {e}")
 
+    @role.command("help")
+    async def role_help(self, event: AstrMessageEvent):
+        '''查询所有可用命令'''
+        yield event.plain_result(
+            "📋 角色扮演命令 (v1.2.2)\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "🔧 角色管理\n"
+            "  /role list — 已安装角色\n"
+            "  /role switch <名> — 切换角色\n"
+            "  /role status — 当前状态(角色+记忆)\n"
+            "  /role off — 关闭扮演\n"
+            "\n"
+            "📡 服务器\n"
+            "  /role ping — 连通性检测\n"
+            "  /role preview [audio|images] — 预览列表\n"
+            "  /role update [audio|images|status] — 同步资源\n"
+            "  /role upload audio <路径> — 单传音频\n"
+            "  /role upload image <文件> — 单传图片\n"
+            "  /role push — 一键打包全推\n"
+            "\n"
+            "🎤 语音\n"
+            "  /role ttstest — TTS链路诊断"
+        )
+
     @role.command("ping")
     async def role_ping(self, event: AstrMessageEvent):
         '''测试与可信任服务器的连通性。'''
@@ -1420,12 +1444,237 @@ class RoleplayPlugin(Star):
         except Exception as e:
             yield event.plain_result(f"❌ ping 失败: {e}")
 
+    @role.command("preview")
+    async def role_preview(self, event: AstrMessageEvent, target: str = ""):
+        '''预览服务器上的音频/图片列表(不下载)。target: audio / images / 空(两个都看)'''
+        if not self._active_role or not self._role_config:
+            yield event.plain_result("请先激活角色")
+            return
+        server = self._trusted_server_url
+        if not server:
+            yield event.plain_result("未配置可信任服务器地址")
+            return
+        target = target.strip().lower()
+        url_base = server.rstrip("/")
+        role = self._active_role
+        yield event.plain_result(f"🔍 预览 {url_base}\n   角色: {role}")
+        import aiohttp
+        from urllib.parse import quote
+        headers = self._server_auth_headers(self._trusted_server_token)
+        role_encoded = quote(role, safe="")
+        try:
+            async with aiohttp.ClientSession() as session:
+                async def _get(url):
+                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                        ct = r.headers.get("Content-Type", "")
+                        if "text/html" in ct:
+                            return None, "HTML"
+                        if r.status != 200:
+                            return None, f"HTTP {r.status}"
+                        return (await r.json()), None
+
+                results = []
+                if target in ("audio", ""):
+                    data, err = await _get(f"{url_base}/api/roles/{role_encoded}/audio")
+                    if err:
+                        yield event.plain_result(f"❌ 音频: {err}")
+                        return
+                    exp = data.get("expressions", [])
+                    mus = data.get("music", [])
+                    results.append(f"🎵 音频 ({len(exp)} 语气词 + {len(mus)} 音乐)")
+                    for item in exp[:20]:
+                        results.append(f"   🔊 {item['name']}  ({item.get('size',0)//1024}KB)")
+                    for item in mus[:10]:
+                        results.append(f"   🎶 {item['name']}  ({item.get('size',0)//1024}KB)")
+                    if len(exp) > 20:
+                        results.append(f"   ... 还有 {len(exp)-20} 个语气词")
+                if target in ("images", ""):
+                    data, err = await _get(f"{url_base}/api/roles/{role_encoded}/images")
+                    if err:
+                        yield event.plain_result(f"❌ 图片: {err}")
+                        return
+                    imgs = data.get("images", [])
+                    results.append(f"🖼️ 图片 ({len(imgs)} 张)")
+                    for item in imgs[:15]:
+                        results.append(f"   🖼 {item['name']}  ({item.get('size',0)//1024}KB)")
+                    if len(imgs) > 15:
+                        results.append(f"   ... 还有 {len(imgs)-15} 张")
+                if not results:
+                    results.append("服务器没有可预览的资源")
+                yield event.plain_result("\n".join(results))
+        except aiohttp.ClientConnectorError:
+            yield event.plain_result(f"❌ 无法连接 {url_base}")
+        except Exception as e:
+            yield event.plain_result(f"❌ 预览失败: {str(e)[:200]}")
+
+    @role.command("upload")
+    async def role_upload(self, event: AstrMessageEvent, target: str = "", filename: str = ""):
+        '''上传单个音频/图片到服务器。批量上传请用 /role push。'''
+        server = self._trusted_server_url
+        if not server:
+            yield event.plain_result("未配置可信任服务器地址")
+            return
+        role = self._active_role
+        if not role or not self._role_config:
+            yield event.plain_result("请先激活角色")
+            return
+        role_dir = self._role_config.get("_role_dir", "")
+        if not role_dir:
+            yield event.plain_result("❌ 角色目录不存在")
+            return
+        target = target.strip().lower()
+        filename = filename.strip()
+        if target not in ("audio", "image"):
+            yield event.plain_result("用法: /role upload audio <路径>  或  /role upload image <文件名>\n\n批量上传请用 /role push")
+            return
+        if not filename:
+            yield event.plain_result(f"请指定要上传的文件名\n示例: /role upload audio expressions/喵.mp3\n批量上传请用 /role push")
+            return
+        src = os.path.join(role_dir, "audio", filename) if target == "audio" else os.path.join(role_dir, "images", filename)
+        if not os.path.isfile(src):
+            yield event.plain_result(f"❌ 文件不存在: {src}")
+            return
+        fsize = os.path.getsize(src)
+        if fsize > 5 * 1024 * 1024 and target == "audio":
+            yield event.plain_result(f"❌ 音频过大 ({fsize//1024}KB > 5MB)")
+            return
+        if fsize > 10 * 1024 * 1024 and target == "image":
+            yield event.plain_result(f"❌ 图片过大 ({fsize//1024}KB > 10MB)")
+            return
+        import aiohttp
+        from urllib.parse import quote
+        url_base = server.rstrip("/")
+        role_encoded = quote(role, safe="")
+        headers = self._server_auth_headers(self._trusted_server_token)
+        basename = os.path.basename(filename)
+        yield event.plain_result(f"📤 上传 {basename} ({fsize//1024}KB) → {url_base} ...")
+        try:
+            async with aiohttp.ClientSession() as session:
+                if target == "audio":
+                    parts = filename.replace("\\", "/").split("/")
+                    category = parts[0] if len(parts) > 1 else "expressions"
+                    api_url = f"{url_base}/api/roles/{role_encoded}/audio"
+                    with open(src, "rb") as f:
+                        form = aiohttp.FormData()
+                        form.add_field("file", f, filename=basename, content_type="audio/mpeg" if basename.endswith(".mp3") else "audio/wav")
+                        form.add_field("category", category)
+                        async with session.post(api_url, data=form, headers=headers,
+                                                timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                yield event.plain_result(f"✅ {data.get('msg', '上传成功')}")
+                            else:
+                                body = await resp.text()
+                                yield event.plain_result(f"❌ 服务器返回 {resp.status}: {body[:200]}")
+                else:
+                    api_url = f"{url_base}/api/roles/{role_encoded}/images"
+                    with open(src, "rb") as f:
+                        form = aiohttp.FormData()
+                        form.add_field("file", f, filename=basename)
+                        async with session.post(api_url, data=form, headers=headers,
+                                                timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                yield event.plain_result(f"✅ {data.get('msg', '上传成功')}")
+                            else:
+                                body = await resp.text()
+                                yield event.plain_result(f"❌ 服务器返回 {resp.status}: {body[:200]}")
+        except aiohttp.ClientConnectorError:
+            yield event.plain_result(f"❌ 无法连接 {url_base}")
+        except Exception as e:
+            yield event.plain_result(f"❌ 上传失败: {str(e)[:200]}")
+
+    @role.command("push")
+    async def role_push(self, event: AstrMessageEvent):
+        '''打包本地音频+图片为ZIP,一键推送到服务器(进入审核队列)。'''
+        server = self._trusted_server_url
+        if not server:
+            yield event.plain_result("未配置可信任服务器地址")
+            return
+        role = self._active_role
+        if not role or not self._role_config:
+            yield event.plain_result("请先激活角色")
+            return
+        role_dir = self._role_config.get("_role_dir", "")
+        if not role_dir or not os.path.isdir(role_dir):
+            yield event.plain_result("❌ 角色目录不存在")
+            return
+        audio_dir = os.path.join(role_dir, "audio")
+        images_dir = os.path.join(role_dir, "images")
+        has_audio = os.path.isdir(audio_dir)
+        has_images = os.path.isdir(images_dir)
+        if not has_audio and not has_images:
+            yield event.plain_result("❌ 本地没有 audio/ 或 images/ 目录,无需推送")
+            return
+        import zipfile
+        import tempfile
+        import uuid
+        import aiohttp
+        from urllib.parse import quote
+        tmp_zip = os.path.join(tempfile.gettempdir(), f"role_push_{uuid.uuid4().hex[:8]}.zip")
+        try:
+            file_count = 0
+            total_size = 0
+            with zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                if has_audio:
+                    for root, dirs, files in os.walk(audio_dir):
+                        for fname in files:
+                            fpath = os.path.join(root, fname)
+                            arcname = os.path.relpath(fpath, role_dir).replace("\\", "/")
+                            zf.write(fpath, arcname)
+                            file_count += 1
+                            total_size += os.path.getsize(fpath)
+                if has_images:
+                    for root, dirs, files in os.walk(images_dir):
+                        for fname in files:
+                            fpath = os.path.join(root, fname)
+                            arcname = os.path.relpath(fpath, role_dir).replace("\\", "/")
+                            zf.write(fpath, arcname)
+                            file_count += 1
+                            total_size += os.path.getsize(fpath)
+            zip_size = os.path.getsize(tmp_zip)
+            if zip_size > 100 * 1024 * 1024:
+                os.remove(tmp_zip)
+                yield event.plain_result(f"❌ 压缩包过大 ({zip_size//1024//1024}MB > 100MB)")
+                return
+            yield event.plain_result(f"📦 打包完成: {file_count}个文件, {total_size//1024}KB → {zip_size//1024}KB\n📤 上传中...")
+            url_base = server.rstrip("/")
+            role_encoded = quote(role, safe="")
+            headers = self._server_auth_headers(self._trusted_server_token)
+            async with aiohttp.ClientSession() as session:
+                api_url = f"{url_base}/api/roles/{role_encoded}/push"
+                with open(tmp_zip, "rb") as f:
+                    form = aiohttp.FormData()
+                    form.add_field("file", f, filename=f"{role}_audio_images.zip",
+                                   content_type="application/zip")
+                    form.add_field("role", role)
+                    form.add_field("author", self._role_config.get("author", ""))
+                    form.add_field("version", self._role_config.get("version", "1.0.0"))
+                    form.add_field("file_count", str(file_count))
+                    async with session.post(api_url, data=form, headers=headers,
+                                            timeout=aiohttp.ClientTimeout(total=60)) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            yield event.plain_result(
+                                f"✅ {data.get('msg','推送成功')}\n"
+                                f"   管理员审核通过后将上架,可按需选择文件"
+                            )
+                        else:
+                            body = await resp.text()
+                            yield event.plain_result(f"❌ 服务器返回 {resp.status}: {body[:200]}")
+        except aiohttp.ClientConnectorError:
+            yield event.plain_result(f"❌ 无法连接 {url_base}")
+        except Exception as e:
+            yield event.plain_result(f"❌ 推送失败: {str(e)[:300]}")
+        finally:
+            try:
+                os.remove(tmp_zip)
+            except Exception:
+                pass
+
     @role.command("update")
     async def role_update(self, event: AstrMessageEvent, target: str = ""):
-        '''从可信任服务器同步角色资源(音频/图片)。
-        target: ""(全部) / audio / images / status
-        按文件大小对比,只下载变化的。角色名自动URL编码。
-        '''
+        '''从可信任服务器同步角色资源(音频/图片)。target: ""(全部) / audio / images / status。按文件大小对比,只下载变化的。'''
         if not self._active_role or not self._role_config:
             yield event.plain_result("请先激活角色")
             return
@@ -1443,36 +1692,46 @@ class RoleplayPlugin(Star):
         role_encoded = quote(role, safe="")
         try:
             async with aiohttp.ClientSession() as session:
-                audio_url = f"{url_base}/api/roles/{role_encoded}/audio"
-                async with session.get(audio_url, headers=headers,
-                                       timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    ct = resp.headers.get("Content-Type", "")
-                    if "text/html" in ct:
-                        yield event.plain_result(
-                            f"❌ 服务器返回HTML — 反向代理可能未配置 /api/ 路由\n"
-                            f"  请确保 Nginx/Caddy 将 /api/* 代理到 Flask(端口8766)"
-                        )
+                async def _fetch_json(url: str):
+                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
+                        ct = r.headers.get("Content-Type", "")
+                        if "text/html" in ct:
+                            return None, "HTML"
+                        if r.status != 200:
+                            return None, await r.text()
+                        return await r.json(), None
+
+                audio_info, audio_ok = None, None
+                img_info, img_ok = None, None
+                if target in ("audio", ""):
+                    audio_info, audio_ok = await _fetch_json(f"{url_base}/api/roles/{role_encoded}/audio")
+                    if audio_ok == "HTML":
+                        yield event.plain_result("❌ 服务器返回HTML — 反向代理未将 /api/ 转发到Flask")
                         return
-                    if resp.status != 200:
-                        body = await resp.text()
-                        yield event.plain_result(f"❌ 服务器返回 {resp.status}\n  {body[:200]}")
+                    if audio_ok:
+                        yield event.plain_result(f"❌ 音频API: {audio_ok[:200]}")
                         return
-                    audio_info = await resp.json()
-                if not audio_info.get("ok"):
-                    yield event.plain_result(f"❌ 服务器: {audio_info.get('msg','未知错误')}")
-                    return
-                remote_version = audio_info.get("version", "?")
-                expressions = audio_info.get("expressions", [])
-                music = audio_info.get("music", [])
-                total_audio = len(expressions) + len(music)
+                if target in ("images", ""):
+                    img_info, img_ok = await _fetch_json(f"{url_base}/api/roles/{role_encoded}/images")
+                    if img_ok == "HTML":
+                        yield event.plain_result("❌ 服务器返回HTML — 反向代理未将 /api/ 转发到Flask")
+                        return
+                    if img_ok:
+                        yield event.plain_result(f"❌ 图片API: {img_ok[:200]}")
+                        return
+
+                remote_version = (audio_info or {}).get("version", "?")
+                expressions = (audio_info or {}).get("expressions", [])
+                music = (audio_info or {}).get("music", [])
+                remote_images = (img_info or {}).get("images", [])
             if target == "status":
                 role_dir = self._role_config.get("_role_dir", "")
-                local_audio_dir = os.path.join(role_dir, "audio", "expressions") if role_dir else ""
-                local_audio_cnt = len(os.listdir(local_audio_dir)) if local_audio_dir and os.path.isdir(local_audio_dir) else 0
+                la = len(os.listdir(os.path.join(role_dir, "audio", "expressions"))) if role_dir and os.path.isdir(os.path.join(role_dir, "audio", "expressions")) else 0
+                li = len(os.listdir(os.path.join(role_dir, "images"))) if role_dir and os.path.isdir(os.path.join(role_dir, "images")) else 0
                 yield event.plain_result(
-                    f"📊 [{role}] 版本对比\n"
-                    f"  本地: v{self._role_config.get('version','?')}  音频{local_audio_cnt}个\n"
-                    f"  远程: v{remote_version}  音频{total_audio}个\n"
+                    f"📊 [{role}]\n"
+                    f"  本地: v{self._role_config.get('version','?')}  音频{la}个 图片{li}个\n"
+                    f"  远程: v{remote_version}  音频{len(expressions)+len(music)}个 图片{len(remote_images)}个\n"
                     f"  服务器: {url_base}"
                 )
                 return
@@ -1486,14 +1745,17 @@ class RoleplayPlugin(Star):
                     to_sync.append(("audio/expressions", item["name"], item.get("size", 0)))
                 for item in music:
                     to_sync.append(("audio/music", item["name"], item.get("size", 0)))
-            updated = 0
-            skipped = 0
+            if target in ("images", ""):
+                for item in remote_images:
+                    to_sync.append(("images", item["name"], item.get("size", 0)))
+            a_up, a_sk, i_up, i_sk = 0, 0, 0, 0
             for category, fname, r_size in to_sync:
-                if target == "images" and not category.startswith("images"):
-                    continue
                 local_path = os.path.join(role_dir, category, fname)
                 if os.path.exists(local_path) and os.path.getsize(local_path) == r_size:
-                    skipped += 1
+                    if category.startswith("audio"):
+                        a_sk += 1
+                    else:
+                        i_sk += 1
                     continue
                 cat_dir = category.split("/")[0]
                 subcat = category.split("/")[1] if "/" in category else ""
@@ -1505,25 +1767,24 @@ class RoleplayPlugin(Star):
                         os.makedirs(os.path.dirname(local_path), exist_ok=True)
                         with open(local_path, "wb") as f:
                             f.write(data)
-                        updated += 1
-            msg = f"✅ [{role}] 同步完成\n"
+                        if category.startswith("audio"):
+                            a_up += 1
+                        else:
+                            i_up += 1
+            lines = [f"✅ [{role}] 同步完成"]
             if target in ("audio", ""):
-                msg += f"音频: 更新{updated} 跳过{skipped}\n"
+                lines.append(f"音频: 更新{a_up} 跳过{a_sk}")
             if target in ("images", ""):
-                msg += f"图片: 更新{updated} 跳过{skipped}\n"
-            if updated == 0 and skipped == 0:
-                msg += "远程没有可用的音频/图片资源"
-            yield event.plain_result(msg.strip())
+                lines.append(f"图片: 更新{i_up} 跳过{i_sk}")
+            if a_up + a_sk + i_up + i_sk == 0:
+                lines.append("远程没有可用资源")
+            yield event.plain_result("\n".join(lines))
         except aiohttp.ClientConnectorError:
             yield event.plain_result(f"❌ 无法连接 {url_base} — 服务器未启动或地址错误")
         except Exception as e:
             err_msg = str(e)
             if "JSON" in err_msg or "json" in err_msg.lower():
-                yield event.plain_result(
-                    f"❌ JSON解析失败 — 服务器返回了非JSON内容\n"
-                    f"  可能原因: 反向代理未将 /api/ 转发到Flask\n"
-                    f"  错误: {err_msg[:150]}"
-                )
+                yield event.plain_result(f"❌ JSON解析 — 服务器返回非JSON\n  可能: Nginx未代理 /api/* → Flask\n  错误: {err_msg[:150]}")
             else:
                 yield event.plain_result(f"❌ 更新失败: {err_msg[:300]}")
 
