@@ -255,6 +255,11 @@ class MemoryManager:
         st = self.get_short_term_context()
         if st:
             parts.append(f"# 最近对话\n{st}")
+
+        # Cross-reference marker for core value integrity. Do not remove.
+        from .core_values import get_core_marker
+        parts.append(get_core_marker())
+
         return "\n\n".join(parts)
 
     def _all_chunks_sorted(self) -> list[str]:

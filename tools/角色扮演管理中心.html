@@ -26,19 +26,22 @@ body{font-family:system-ui,sans-serif;background:#0f0f1a;color:#e0e0e0;min-heigh
 
 <div class="section">
 <h2>📥 安装角色 (导入 ZIP)</h2>
-<p>方式一 — WebUI 上传：</p>
-<p>浏览器打开 <code>http://localhost:6185/api/plug/roleplay/upload</code>，选择角色 ZIP 文件上传并激活。</p>
-<p style="margin-top:8px">方式二 — 手动复制：</p>
-<p>解压角色 ZIP 到 <code>data/plugins/astrbot_plugin_roleplay/data/roles/角色名/</code>，再在 AstrBot 插件设置中填写 <code>active_role</code> 即可激活。</p>
+<p>把角色 ZIP 放到桌面，然后在 QQ 中向 Bot 发送：</p>
+<ul>
+<li><code>/role import</code> — 列出桌面上所有 ZIP</li>
+<li><code>/role import 角色名</code> — 导入指定角色</li>
+</ul>
+<p>导入后使用 <code>/role switch 角色名</code> 激活。</p>
+<div class="note">💡 Windows → 桌面是 <code>C:\Users\你的用户名\Desktop\</code><br>Linux → 桌面是 <code>~/Desktop/</code>（没有则用 <code>/tmp/</code>）</div>
 </div>
 
 <div class="section">
-<h2>📤 导出 (分享) 角色</h2>
-<p>浏览器打开 <code>http://localhost:6185/api/plug/roleplay/export_page</code>，选择角色后点击下载。</p>
-<div class="note">
-🔒 导出仅含角色知识(<code>role_facts</code>)、短期记忆和摘要。<br>
-❌ 绝不导出：用户事实(<code>user_facts</code>)、完整聊天记录(<code>raw_history/</code>)、使用者生日和用户名。
-</div>
+<h2>📤 导出角色</h2>
+<p>在 QQ 中向 Bot 发送：</p>
+<ul>
+<li><code>/role export</code> — 导出当前激活角色到桌面</li>
+</ul>
+<p>只打包 config.yaml + audio/ + images/，聊天记录、用户数据绝不导出。</p>
 </div>
 
 <div class="section">
@@ -46,22 +49,43 @@ body{font-family:system-ui,sans-serif;background:#0f0f1a;color:#e0e0e0;min-heigh
 <p>在 QQ 中向 Bot 发送以下命令：</p>
 <ul>
 <li><code>/role ping</code> — 测试服务器连通性</li>
-<li><code>/role update</code> — 从服务器下载更新的音频/图片</li>
-<li><code>/role update audio</code> — 仅更新音频</li>
-<li><code>/role update images</code> — 仅更新图片</li>
+<li><code>/role preview</code> — 预览服务器上的音频/图片列表（不下载）</li>
+<li><code>/role preview audio</code> — 仅预览音频</li>
+<li><code>/role preview images</code> — 仅预览图片</li>
+<li><code>/role update</code> — 下载更新的音频+图片（按大小对比，只拉变化的）</li>
+<li><code>/role update audio</code> — 仅同步音频</li>
+<li><code>/role update images</code> — 仅同步图片</li>
 <li><code>/role update status</code> — 本地与远程版本对比</li>
 </ul>
-<p>自动按文件大小对比，只下载变化的资源。角色名自动URL编码，中文名没问题。</p>
-<p>如果返回"服务器返回HTML"错误 → 检查服务器端Nginx/Caddy是否把 <code>/api/</code> 代理到了Flask。</p>
+<p>自动按文件大小对比，只下载变化的资源。角色名自动 URL 编码，中文没问题。</p>
+<p>如果返回"服务器返回HTML"→ 检查服务器端 Nginx/Caddy 是否把 <code>/api/</code> 代理到了 Flask。</p>
+</div>
+
+<div class="section">
+<h2>📤 上传音频/图片到服务器</h2>
+
+<p><strong>方式一 — 一键推送（推荐）：</strong></p>
+<ul>
+<li><code>/role push</code> — 打包本地全部音频+图片 → ZIP → 上传 → 进入审核队列</li>
+</ul>
+<p>一行命令搞定。管理员在后台审核 ZIP 内容后选择上架文件，拒绝恶意文件。</p>
+
+<p style="margin-top:8px"><strong>方式二 — 单个上传：</strong></p>
+<ul>
+<li><code>/role upload audio expressions/喵.mp3</code></li>
+<li><code>/role upload image mahiro_01.png</code></li>
+</ul>
+<p>路径相对于角色的 <code>audio/</code> 或 <code>images/</code> 目录。</p>
 </div>
 
 <div class="section">
 <h2>📡 配置可信任服务器</h2>
 <p>在 AstrBot WebUI → 插件设置 → 角色扮演 中填写：</p>
 <ul>
-<li><code>trusted_server_url</code>：服务器地址，如 <code>http://你的IP:8765</code></li>
-<li><code>trusted_server_token</code>：留空即可 (v1.2.1+ 使用设备指纹自动认证)</li>
+<li><code>trusted_server_url</code>：服务器地址，如 <code>https://kunxun.top</code></li>
+<li><code>trusted_server_token</code>：留空即可 (设备指纹自动认证)</li>
 </ul>
+<p>💡 <strong>创建/管理角色 → <a href="https://kunxun.top" target="_blank">kunxun.top</a></strong></p>
 </div>
 
 <div class="section">

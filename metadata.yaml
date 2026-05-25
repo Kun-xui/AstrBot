@@ -14,6 +14,8 @@ help: |
   ================
   QQ频道命令：
     /role help    - 查看所有可用命令
+    /role export  - 导出角色ZIP到桌面
+    /role import [角色名] - 从桌面ZIP导入角色
     /role list     - 列出已安装角色
     /role switch <角色名>  - 切换角色
     /role status   - 查看角色状态

@@ -37,7 +37,14 @@ class ImageHandler:
             return ""
         if not image_list:
             return ""
+        file_descs = []
+        for img in image_list:
+            f = img.get("file", "")
+            d = img.get("desc", "") or os.path.splitext(os.path.basename(f))[0]
+            file_descs.append(f"{d}")
+        sample = ", ".join(file_descs[:12])
         return (
-            "\n[系统提示] 你的每条回复都会根据情绪自动附带一张你的角色表情图，"
-            "你不需要在文字中引用任何图片文件名，正常说话即可。"
+            f"\n[系统提示] 你的每条回复都会根据情绪自动附带角色表情图。"
+            f"可用图片: {sample}。"
+            f"你不需在文字中引用文件名，正常说话即可。"
         )

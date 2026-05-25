@@ -144,17 +144,22 @@ class AudioInjector:
 
     def get_capability_hint(self) -> str:
         lines = []
-        lines.append("# 音频命令（主动控制音频发送）")
-        lines.append("你可以在回复中使用以下标签来请求音频，标签会被自动移除，用户不会看到：")
-        lines.append("- `[tts]` 或 `[语音]`：将本条消息转为语音发送（文字不显示，只发语音）")
-        emo_list = list(self._expressions.keys())
-        dw_list = list(self._daily_words.keys())
-        all_audio_keys = sorted(set(emo_list + dw_list))
-        if all_audio_keys:
-            sample = all_audio_keys[:15]
-            lines.append(f"- `[audio:名称]` 或 `[语气:名称]`：附加语气词音频。可选: {', '.join(sample)}")
+        lines.append("# 音频能力")
+        lines.append("- 语气词音频会根据你的情绪自动播放，你不需要主动控制。")
+        lines.append("- 如需强制指定: 在回复中使用 `[audio:关键词]`。")
+        exp_list = list(self._expressions.keys())
+        if exp_list:
+            lines.append(f"- 可用语气词类别: {', '.join(exp_list)}")
+        sample_files = []
+        for emo, files in self._expressions.items():
+            for f in files[:2]:
+                name = os.path.splitext(os.path.basename(f))[0]
+                if name not in sample_files:
+                    sample_files.append(name)
+        if sample_files:
+            lines.append(f"- 可用音频文件名: {', '.join(sample_files[:30])}")
+        lines.append("- `[tts]` 或 `[语音]`：将本条消息转为语音发送（文字不显示，只发语音）。")
         music_list = list(self._music.keys())
         if music_list:
-            lines.append(f"- `[music:歌名]` 或 `[音乐:歌名]`：附加音乐音频。可选: {', '.join(music_list)}")
-        lines.append("- 不使用任何标签时，消息以纯文本发送。这是默认行为，不必每次都用标签。")
+            lines.append(f"- `[music:歌名]` 或 `[音乐:歌名]`：附加音乐。可用: {', '.join(music_list)}")
         return "\n".join(lines)

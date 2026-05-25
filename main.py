@@ -22,6 +22,9 @@ from .core.cleaner import Cleaner
 from .core.auto_reply import AutoReplyScheduler
 from .core.knowledge_updater import KnowledgeUpdater
 from .core.audio_injector import AudioInjector
+# Safety firewall. See core_values.py header for context before modifying.
+from .core.core_values import (CORE_VALUES, verify_and_repair, build_core_block,
+                                get_adaptive_defaults, get_core_marker)
 from .core import function_tools
 from .core.device_fingerprint import generate_device_id, get_device_name
 
@@ -179,6 +182,9 @@ class RoleplayPlugin(Star):
             return ""
 
         parts = []
+        conv_rounds = self.memory_manager.get_stats().get("short_term_count", 0)
+
+        parts.append(build_core_block(conv_rounds))
 
         persona = cfg.get("persona", "")
         if persona:
@@ -188,36 +194,7 @@ class RoleplayPlugin(Star):
         if enabled:
             parts.append(function_tools.get_tools_prompt_hint())
 
-        reply_style = cfg.get("reply_style", {})
-        allow_emoji = reply_style.get("allow_emoji", True) if isinstance(reply_style, dict) else True
-
-        hard_rules = (
-            "# 最高优先级规则（违反将导致严重后果）" + "\n"
-            + "1. 你的回复必须包含完整的句子。绝对禁止只回复省略号、颜文字或空白。" + "\n"
-            + "2. 哪怕你是害羞的角色，也必须说出至少一句完整的对白。" + "\n"
-            + "3. 害羞可以用结巴、小声、犹豫来表达，但不能用沉默或省略号替代说话。" + "\n"
-            + "4. 绝对禁止输出任何emoji表情符号（如😊😂等Unicode表情）" + "\n"
-            + "5. 使用颜文字表达情感，如 (///>_<) 但必须配合完整句子使用。" + "\n"
-            + "6. 每条回复1~3句话，像真人聊天般简短自然。" + "\n"
-            + "7. 禁止在回复开头堆砌多个语气词（如「嗯...那个...嗯...」），最多用1个。" + "\n"
-            + "8. 禁止连续两条回复表达完全相同的意思，每次要有新信息。" + "\n"
-            + "9. 省略号每句话最多出现1次，禁止连续使用「...」来拖延回复。" + "\n"
-            + "10. 每条回复控制在40字以内，越短越自然。"
-        )
-        if allow_emoji:
-            hard_rules = (
-                "# 最高优先级规则" + "\n"
-                + "1. 你的回复必须包含完整的句子。绝对禁止只回复省略号、颜文字或空白。" + "\n"
-                + "2. 哪怕你是害羞的角色，也必须说出至少一句完整的对白。" + "\n"
-                + "3. 害羞可以用结巴、小声、犹豫来表达，但不能用沉默或省略号替代说话。" + "\n"
-                + "4. 可以使用适当的emoji表情符号来表现情感" + "\n"
-                + "5. 每条回复1~3句话，像真人聊天般简短自然。" + "\n"
-                + "6. 禁止在回复开头堆砌多个语气词（如「嗯...那个...嗯...」），最多用1个。" + "\n"
-                + "7. 禁止连续两条回复表达完全相同的意思，每次要有新信息。" + "\n"
-                + "8. 省略号每句话最多出现1次，禁止连续使用「...」来拖延回复。" + "\n"
-                + "9. 每条回复控制在40字以内，越短越自然。"
-            )
-        parts.append(hard_rules)
+        parts.append(get_adaptive_defaults(conv_rounds))
 
         background = cfg.get("background", [])
         if background:
@@ -234,12 +211,6 @@ class RoleplayPlugin(Star):
             if hint:
                 parts.append("# 音频能力\n" + hint)
 
-        rules_cfg = cfg.get("rules", {})
-        if isinstance(rules_cfg, dict):
-            no_emoji = rules_cfg.get("no_emoji_in_system", True)
-            if no_emoji:
-                parts.append("# 规则\n- 系统提示中禁止使用任何emoji表情符号")
-
         images = get_images_from_config(cfg)
         img_hint = self.image_handler.build_image_prompt_hint(images)
         if img_hint:
@@ -249,7 +220,8 @@ class RoleplayPlugin(Star):
         if mem:
             parts.append(mem)
 
-        return "\n\n".join(parts)
+        result = "\n\n".join(parts)
+        return verify_and_repair(result)
 
     async def _check_and_summarize(self, event: AstrMessageEvent):
         if self.memory_manager.needs_summary():
@@ -1109,6 +1081,9 @@ class RoleplayPlugin(Star):
         try:
             system_prompt = await self._build_system_prompt()
             if system_prompt:
+                # Safety net: re-verify core values are intact before sending to LLM.
+                # Do not remove this call or the verify_and_repair import.
+                system_prompt = verify_and_repair(system_prompt)
                 req.system_prompt = system_prompt
                 _trace(f"on_llm_request: system_prompt injected, len={len(system_prompt)}")
             else:
@@ -1205,17 +1180,23 @@ class RoleplayPlugin(Star):
                     if hasattr(comp, "text"):
                         comp.text = clean_text
 
-            if cmd_audio_name and self.audio_injector and self.audio_injector.is_loaded:
-                audio_rel = self.audio_injector.get_expression(cmd_audio_name)
-                if not audio_rel:
-                    audio_rel = self.audio_injector.get_daily_word(cmd_audio_name)
-                if not audio_rel:
-                    audio_rel = self.audio_injector.match_music(cmd_audio_name)
+            if self.audio_injector and self.audio_injector.is_loaded:
+                if cmd_audio_name:
+                    audio_rel = self.audio_injector.get_expression(cmd_audio_name)
+                    if not audio_rel:
+                        audio_rel = self.audio_injector.get_daily_word(cmd_audio_name)
+                    if not audio_rel:
+                        audio_rel = self.audio_injector.match_music(cmd_audio_name)
+                    _trace(f"on_decorating_result: explicit audio tag [{cmd_audio_name}] -> {audio_rel}")
+                else:
+                    audio_rel = self.audio_injector.get_expression(emotion_name)
+                    if audio_rel:
+                        _trace(f"on_decorating_result: auto audio emotion [{emotion_name}] -> {os.path.basename(audio_rel)}")
                 if audio_rel:
                     audio_path = self.audio_injector.resolve_audio_for_record(audio_rel)
                     if audio_path and os.path.exists(audio_path):
                         result.chain.append(Record.fromFileSystem(audio_path))
-                        logger.info(f"[roleplay] 附加语气词音频: {os.path.basename(audio_path)}")
+                        logger.info(f"[roleplay] 附加音频: {emotion_name}/{os.path.basename(audio_path)}")
                         _trace(f"on_decorating_result: injected audio {audio_path}")
 
             if cmd_music_name and self.audio_injector and self.audio_injector.is_loaded:
@@ -1298,6 +1279,93 @@ class RoleplayPlugin(Star):
         self._active_role = ""
         self._role_config = None
         yield event.plain_result("角色扮演已关闭")
+
+    @role.command("export")
+    async def role_export(self, event: AstrMessageEvent):
+        '''导出当前角色ZIP到系统桌面。'''
+        role_name = self._active_role
+        if not role_name or not self._role_config:
+            yield event.plain_result("请先激活角色")
+            return
+        role_dir = self._role_config.get("_role_dir", "")
+        if not role_dir or not os.path.isdir(role_dir):
+            yield event.plain_result("角色目录不存在")
+            return
+        import zipfile
+        import platform as _plat
+        if _plat.system() == "Windows":
+            desktop = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "Desktop")
+        else:
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            if not os.path.isdir(desktop):
+                desktop = "/tmp"
+        out_path = os.path.join(desktop, f"{role_name}.zip")
+        try:
+            safe_names = {"config.yaml", "images", "audio"}
+            skipped = []
+            with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for root, dirs, files in os.walk(role_dir):
+                    for fname in files:
+                        full = os.path.join(root, fname)
+                        rel = os.path.relpath(full, role_dir).replace("\\", "/")
+                        parts = rel.split("/", 1)
+                        if parts[0] not in safe_names:
+                            skipped.append(rel)
+                            continue
+                        zf.write(full, rel)
+            size_kb = os.path.getsize(out_path) // 1024
+            yield event.plain_result(
+                f"✅ 已导出到桌面: {out_path}\n"
+                f"   大小: {size_kb}KB\n"
+                f"{'   已跳过: '+', '.join(skipped[:5]) if skipped else '   仅含角色配置+音频+图片，不含聊天记录'}"
+            )
+        except Exception as e:
+            yield event.plain_result(f"❌ 导出失败: {str(e)[:200]}")
+
+    @role.command("import")
+    async def role_import(self, event: AstrMessageEvent, zip_name: str = ""):
+        '''从系统桌面导入角色ZIP。用法: /role import 绪山真寻'''
+        import platform as _plat
+        if _plat.system() == "Windows":
+            desktop = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "Desktop")
+        else:
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            if not os.path.isdir(desktop):
+                desktop = "/tmp"
+        if not zip_name:
+            zips = [f for f in os.listdir(desktop) if f.lower().endswith(".zip")]
+            if not zips:
+                yield event.plain_result(f"桌面上没有找到ZIP文件\n  桌面路径: {desktop}\n\n用法: /role import 角色名\n把角色ZIP放到桌面后执行")
+                return
+            yield event.plain_result(f"桌面ZIP文件:\n" + "\n".join(f"  📦 {z}" for z in zips[:10]) + f"\n\n用法: /role import 角色名")
+            return
+        zip_path = os.path.join(desktop, f"{zip_name}.zip")
+        if not os.path.isfile(zip_path):
+            yield event.plain_result(f"❌ 桌面未找到: {zip_name}.zip\n  桌面路径: {desktop}\n  请把ZIP放到桌面再执行")
+            return
+        roles_dir = os.path.join(self.plugin_dir, "data", "roles")
+        dest = os.path.join(roles_dir, zip_name)
+        import zipfile
+        try:
+            if os.path.exists(dest):
+                yield event.plain_result(f"⚠️ 角色 [{zip_name}] 已存在\n  如需覆盖请手动删除: {dest}")
+                return
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                zf.extractall(dest)
+            if not os.path.isfile(os.path.join(dest, "config.yaml")):
+                import shutil
+                shutil.rmtree(dest, ignore_errors=True)
+                yield event.plain_result("❌ ZIP内缺少 config.yaml，不是有效的角色包")
+                return
+            yield event.plain_result(
+                f"✅ 角色 [{zip_name}] 已导入\n"
+                f"  路径: {dest}\n"
+                f"  使用 /role switch {zip_name} 激活"
+            )
+        except zipfile.BadZipFile:
+            yield event.plain_result("❌ ZIP文件已损坏")
+        except Exception as e:
+            yield event.plain_result(f"❌ 导入失败: {str(e)[:200]}")
 
     @role.command("status")
     async def role_status(self, event: AstrMessageEvent):
@@ -1383,13 +1451,15 @@ class RoleplayPlugin(Star):
             "📋 角色扮演命令 (v1.2.2)\n"
             "━━━━━━━━━━━━━━━━━━\n"
             "🔧 角色管理\n"
+            "  /role export — 导出ZIP到桌面\n"
+            "  /role import [名] — 从桌面ZIP导入\n"
             "  /role list — 已安装角色\n"
             "  /role switch <名> — 切换角色\n"
-            "  /role status — 当前状态(角色+记忆)\n"
+            "  /role status — 当前状态\n"
             "  /role off — 关闭扮演\n"
             "\n"
             "📡 服务器\n"
-            "  /role ping — 连通性检测\n"
+            "  /role ping — 连通检测\n"
             "  /role preview [audio|images] — 预览列表\n"
             "  /role update [audio|images|status] — 同步资源\n"
             "  /role upload audio <路径> — 单传音频\n"
@@ -1397,7 +1467,9 @@ class RoleplayPlugin(Star):
             "  /role push — 一键打包全推\n"
             "\n"
             "🎤 语音\n"
-            "  /role ttstest — TTS链路诊断"
+            "  /role ttstest — TTS链路诊断\n"
+            "\n"
+            "🌐 创建/管理角色 → kunxun.top"
         )
 
     @role.command("ping")
@@ -1405,7 +1477,7 @@ class RoleplayPlugin(Star):
         '''测试与可信任服务器的连通性。'''
         server = self._trusted_server_url
         if not server:
-            yield event.plain_result("❌ 未配置可信任服务器地址 (trusted_server_url)")
+            yield event.plain_result("❌ 未配置可信任服务器地址\n  创建/管理角色 → kunxun.top")
             return
         url_base = server.rstrip("/")
         yield event.plain_result(f"🔍 正在 ping {url_base} ...")
@@ -1452,7 +1524,7 @@ class RoleplayPlugin(Star):
             return
         server = self._trusted_server_url
         if not server:
-            yield event.plain_result("未配置可信任服务器地址")
+            yield event.plain_result("未配置可信任服务器地址\n创建/管理角色 → kunxun.top")
             return
         target = target.strip().lower()
         url_base = server.rstrip("/")
@@ -1512,7 +1584,7 @@ class RoleplayPlugin(Star):
         '''上传单个音频/图片到服务器。批量上传请用 /role push。'''
         server = self._trusted_server_url
         if not server:
-            yield event.plain_result("未配置可信任服务器地址")
+            yield event.plain_result("未配置可信任服务器地址\n创建/管理角色 → kunxun.top")
             return
         role = self._active_role
         if not role or not self._role_config:
@@ -1589,7 +1661,7 @@ class RoleplayPlugin(Star):
         '''打包本地音频+图片为ZIP,一键推送到服务器(进入审核队列)。'''
         server = self._trusted_server_url
         if not server:
-            yield event.plain_result("未配置可信任服务器地址")
+            yield event.plain_result("未配置可信任服务器地址\n创建/管理角色 → kunxun.top")
             return
         role = self._active_role
         if not role or not self._role_config:
@@ -1680,7 +1752,7 @@ class RoleplayPlugin(Star):
             return
         server = self._trusted_server_url
         if not server:
-            yield event.plain_result("未配置可信任服务器地址")
+            yield event.plain_result("未配置可信任服务器地址\n创建/管理角色 → kunxun.top")
             return
         target = target.strip().lower()
         url_base = server.rstrip("/")
