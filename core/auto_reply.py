@@ -6,6 +6,7 @@ import os
 import json
 from datetime import datetime, timedelta
 from astrbot.api import logger
+from .core_values import verify_and_repair
 
 
 class AutoReplyScheduler:
@@ -154,6 +155,9 @@ class AutoReplyScheduler:
             if not provider:
                 return False
             system = f"你是{role_name}，以下是你的设定:\n{persona}"
+            # Safety: inject core values before every auto-reply LLM call.
+            # Auto-reply bypasses _build_system_prompt() so we must verify here.
+            system = verify_and_repair(system)
             audio_injector = getattr(self._plugin, 'audio_injector', None)
             if audio_injector and audio_injector.is_loaded:
                 hint_text = audio_injector.get_capability_hint()
