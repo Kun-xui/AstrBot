@@ -1464,7 +1464,7 @@ class RoleplayPlugin(Star):
     async def _memory_export(self, event: AstrMessageEvent) -> str:
         if not self._active_role or not self._role_config:
             return "请先激活角色"
-        role_dir = self._role_config.get("_role_dir", "")
+        role_dir = self.memory_manager.role_dir
         if not role_dir or not os.path.isdir(role_dir):
             return "角色目录不存在"
         import zipfile, platform as _plat
@@ -1503,10 +1503,10 @@ class RoleplayPlugin(Star):
     async def _memory_import(self, event: AstrMessageEvent) -> str:
         if not self._active_role or not self._role_config:
             return "请先激活角色"
-        role_dir = self._role_config.get("_role_dir", "")
+        role_dir = self.memory_manager.role_dir
         if not role_dir or not os.path.isdir(role_dir):
             return "角色目录不存在"
-        import zipfile, platform as _plat, shutil
+        import zipfile, platform as _plat
         if _plat.system() == "Windows":
             desktop = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")), "Desktop")
         else:
@@ -1521,34 +1521,13 @@ class RoleplayPlugin(Star):
                 f"  导出记忆后在桌面生成此文件，复制到新设备桌面后执行 /role memory import"
             )
         try:
-            backup_dir = role_dir + "_备份" + str(int(time.time()))
-            os.rename(role_dir, backup_dir)
-
             os.makedirs(role_dir, exist_ok=True)
-            for item in ["config.yaml", "audio", "images", "knowledge_base.json"]:
-                src = os.path.join(backup_dir, item)
-                dst = os.path.join(role_dir, item)
-                if os.path.isdir(src):
-                    shutil.copytree(src, dst)
-                elif os.path.isfile(src):
-                    shutil.copy2(src, dst)
-
             with zipfile.ZipFile(zip_path, "r") as zf:
                 zf.extractall(role_dir)
-
-            for sub in ["tts_cache", "models", "voices"]:
-                sp = os.path.join(backup_dir, sub)
-                dp = os.path.join(role_dir, sub)
-                if os.path.exists(sp) and not os.path.exists(dp):
-                    os.rename(sp, dp)
-
-            shutil.rmtree(backup_dir, ignore_errors=True)
             self.memory_manager.set_role(role_name)
-            self.audio_injector.load(role_dir)
             return (
                 f"✅ 记忆已导入！\n"
-                f"   角色 [{role_name}] 已重新加载\n"
-                f"   旧聊天记录和知识已恢复"
+                f"   角色 [{role_name}] 聊天记录和知识已恢复"
             )
         except Exception as e:
             return f"❌ 导入失败: {str(e)[:200]}\n  原数据未受影响"
