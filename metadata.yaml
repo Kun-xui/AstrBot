@@ -2,7 +2,7 @@ name: astrbot_plugin_roleplay
 desc: 动漫角色扮演插件，支持角色ZIP开箱即用、情感引擎、TTS语音合成、短中长期记忆系统、语气词音频、FunctionCall工具调用、特殊日期自动回复、知识库联网更新、分享前隐私清洗
 version: 1.2.2
 author: kunxun
-repo: https://github.com/kunxun/astrbot_plugin_roleplay
+repo: https://github.com/Kun-xui/AstrBot
 support_platforms:
   - aiocqhttp
   - qq_official
