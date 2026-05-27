@@ -52,6 +52,7 @@ class RoleplayPlugin(Star):
         self._trusted_server_token = ""
 
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        self.plugin_dir = plugin_dir
         roles_dir = os.path.join(plugin_dir, "data", "roles")
         data_dir = os.path.join(plugin_dir, "data")
 
