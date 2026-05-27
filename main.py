@@ -1138,7 +1138,7 @@ class RoleplayPlugin(Star):
 
             emotion_name, _, emotion_image_rel = self.emotion_engine.detect(clean_text or reply_text)
             _trace(f"on_decorating_result: emotion={emotion_name}, image={emotion_image_rel}")
-            if emotion_image_rel:
+            if emotion_image_rel and emotion_name != "default":
                 role_dir = self._role_config.get("_role_dir", "")
                 image_path = os.path.join(role_dir, emotion_image_rel)
                 if os.path.exists(image_path):
@@ -1301,7 +1301,7 @@ class RoleplayPlugin(Star):
                 desktop = "/tmp"
         out_path = os.path.join(desktop, f"{role_name}.zip")
         try:
-            safe_names = {"config.yaml", "images", "audio"}
+            safe_names = {"config.yaml", "images", "audio", "knowledge_base.json"}
             skipped = []
             with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 for root, dirs, files in os.walk(role_dir):
